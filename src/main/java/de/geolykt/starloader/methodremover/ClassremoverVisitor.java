@@ -23,20 +23,18 @@ public class ClassremoverVisitor extends ClassVisitor {
         reader.accept(code, 0);
         for (MethodNode method : code.methods) {
             boolean skip = false;
-            for (AnnotationNode annotationNode : method.invisibleAnnotations) {
-                System.out.println("Annotation found: " + annotationNode.desc);
-                if (annotationNode.desc.equalsIgnoreCase(annotation)) {
-                    System.out.println("Annotation matched for method " + method.name + " with descriptor " + method.desc);
-                    methodBlackList.add(Map.entry(method.name, method.desc));
-                    skip = true;
-                    break;
+            if (method.invisibleAnnotations != null) {
+                for (AnnotationNode annotationNode : method.invisibleAnnotations) {
+                    if (annotationNode.desc.equalsIgnoreCase(annotation)) {
+                        methodBlackList.add(Map.entry(method.name, method.desc));
+                        skip = true;
+                        break;
+                    }
                 }
             }
-            if (!skip) {
+            if (!skip && method.visibleAnnotations != null) {
                 for (AnnotationNode annotationNode : method.visibleAnnotations) {
-                    System.out.println("Annotation found: " + annotationNode.desc);
                     if (annotationNode.desc.equalsIgnoreCase(annotation)) {
-                        System.out.println("Annotation matched for method " + method.name + " with descriptor " + method.desc);
                         methodBlackList.add(Map.entry(method.name, method.desc));
                         skip = true;
                         break;
@@ -50,7 +48,6 @@ public class ClassremoverVisitor extends ClassVisitor {
     public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
             String[] exceptions) {
         if (methodBlackList.contains(Map.entry(name, descriptor))) {
-            System.out.println("Stopped method from being processed: " + name + " with descriptor " + descriptor);
             return null;
         }
         return super.visitMethod(access, name, descriptor, signature, exceptions);

@@ -8,10 +8,11 @@ public class MethodremoverGradlePlugin implements Plugin<Project> {
 
     @Override
     public void apply(Project gradleProject) {
-        RemoverGradleExtension extension = gradleProject.getExtensions().create("method-remover", RemoverGradleExtension.class);
-        MethodRemovalTask transformerTask = new MethodRemovalTask(extension);
-        Task jarTask = gradleProject.getTasks().getByName("jar");
-        transformerTask.dependsOn(jarTask);
-        gradleProject.getTasks().add(transformerTask);
+        RemoverGradleExtension extension = gradleProject.getExtensions().create("methodRemover", RemoverGradleExtension.class);
+        MethodRemovalTask transformerTask = gradleProject.getTasks().create("methodRemoval", MethodRemovalTask.class, extension);
+        gradleProject.afterEvaluate(project -> {
+            Task jarTask = project.getTasks().getByName("jar");
+            transformerTask.dependsOn(jarTask);
+        });
     }
 }
