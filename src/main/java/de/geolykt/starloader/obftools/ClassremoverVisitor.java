@@ -1,4 +1,4 @@
-package de.geolykt.starloader.methodremover;
+package de.geolykt.starloader.obftools;
 
 import java.util.HashSet;
 import java.util.Map;

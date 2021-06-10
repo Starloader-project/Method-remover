@@ -1,8 +1,7 @@
-package de.geolykt.starloader.methodremover;
+package de.geolykt.starloader.obftools;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -25,12 +24,12 @@ import org.zeroturnaround.zip.ZipUtil;
 import org.zeroturnaround.zip.transform.ByteArrayZipEntryTransformer;
 import org.zeroturnaround.zip.transform.ZipEntryTransformer;
 
-public class MethodRemovalTask extends Jar {
+public class PostprocessTask extends Jar {
 
-    private final RemoverGradleExtension extension;
+    private final ObftoolsExtension extension;
 
     @Inject
-    public MethodRemovalTask(final RemoverGradleExtension extension) {
+    public PostprocessTask(final ObftoolsExtension extension) {
         super();
         this.extension = extension;
     }
@@ -39,20 +38,23 @@ public class MethodRemovalTask extends Jar {
     protected CopyAction createCopyAction() {
         File source = getArchiveFile().get().getAsFile();
         File temp = new File(source.getParentFile(), source.getName() + ".temp");
-        return new MethodRemoverCopyAction(extension.annotation, temp, source, source);
+        File map = new File(source.getParentFile().getParentFile(), ObfToolsPlugin.INTERMEDIARY_MAP);
+        return new TransformedCopyTask(extension.annotation, temp, source, source, map);
     }
-} class MethodRemoverCopyAction implements CopyAction {
+} class TransformedCopyTask implements CopyAction {
 
     private final String annotation;
     private final File src;
     private final File targetTemp;
     private final File targetFinal;
+    private final File mapLocation;
 
-    public MethodRemoverCopyAction(String annotation, File targetTemp, File targetFinal, File source) {
+    public TransformedCopyTask(String annotation, File targetTemp, File targetFinal, File source, File mapLocation) {
         this.annotation = annotation;
         this.targetTemp = targetTemp;
         this.targetFinal = targetFinal;
         this.src = source;
+        this.mapLocation = mapLocation;
     }
 
     @Override
@@ -63,17 +65,13 @@ public class MethodRemovalTask extends Jar {
             e.printStackTrace();
             return WorkResults.didWork(false);
         }
-        try {
-            FileInputStream fis = new FileInputStream(targetTemp);
-            FileOutputStream fos = new FileOutputStream(targetFinal);
-            fis.transferTo(fos);
-            fos.flush();
-            fis.close();
-            fos.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-            return WorkResults.didWork(false);
-        }
+        net.fabricmc.tinyremapper.Main.main(new String[] {
+                targetTemp.getAbsolutePath(), // srcJar
+                targetFinal.getAbsolutePath(), // outJar
+                mapLocation.getAbsolutePath(), // mappingsFile
+                "official",
+                "intermediary"
+        });
         targetTemp.delete();
         return WorkResults.didWork(true);
     }
@@ -99,7 +97,7 @@ public class MethodRemovalTask extends Jar {
         return new ByteArrayZipEntryTransformer() {
             @Override
             protected byte[] transform(ZipEntry zipEntry, byte[] input) {
-                if (zipEntry.getName().endsWith(".class")) {
+                if (annotation != null && zipEntry.getName().endsWith(".class")) {
                     // TODO in some really strange circumstances there will be attempts at having .class files
                     // that are not valid, we might need to intercept those as they may crash ASM
                     ClassReader reader = new ClassReader(input);

@@ -9,13 +9,17 @@ sourceCompatibility = 11
 targetCompatibility = 11
 
 group = 'de.geolykt.starloader'
-archivesBaseName = 'methodremover'
+archivesBaseName = 'obftools'
 def baseVersion = '1.0.0'
 
 repositories {
     maven {
         name 'geolykt'
         url 'https://geolykt.de/maven'
+    }
+    maven {
+        name = 'QuiltMC Releases'
+        url 'https://maven.quiltmc.org/repository/release/'
     }
     mavenCentral()
 }
@@ -25,7 +29,10 @@ dependencies {
     implementation "org.zeroturnaround:zt-zip:1.14" // TODO update if needed
     implementation "org.ow2.asm:asm:9.1"
     implementation "org.ow2.asm:asm-tree:9.1"
-    implementation "org.ow2.asm:asm-commons:9.1" // For Remapper
+    implementation "org.ow2.asm:asm-commons:9.1"
+    implementation "org.quiltmc:tiny-remapper:0.3.2" // Mappings application
+    implementation "de.geolykt.starloader:stitch:0.6.1" // Mappings generation
+    implementation "de.geolykt.starloader:access-widener:2.0.0" // Access widening technologies
 }
 
 gradlePlugin {
@@ -33,7 +40,7 @@ gradlePlugin {
         widenerPlugin {
             id = project.archivesBaseName
             version = '1.0.0'
-            implementationClass = 'de.geolykt.starloader.methodremover.MethodremoverGradlePlugin'
+            implementationClass = 'de.geolykt.starloader.obftools.ObfToolsPlugin'
         }
     }
 }
@@ -54,18 +61,6 @@ publishing {
             groupId project.group
             artifactId project.archivesBaseName
             version '1.0.0'
-
-            from components['java']
-
-            artifact sourcesJar
-            artifact javadocJar
-        }
-
-        // Also publish a snapshot so people can use the latest version if they wish
-        snapshot(MavenPublication) { publication ->
-            groupId project.group
-            artifactId project.archivesBaseName
-            version '1.0.0-SNAPSHOT'
 
             from components['java']
 
