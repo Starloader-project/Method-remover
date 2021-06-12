@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.jar.JarFile;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -23,6 +24,8 @@ import org.objectweb.asm.Opcodes;
 import org.zeroturnaround.zip.ZipUtil;
 import org.zeroturnaround.zip.transform.ByteArrayZipEntryTransformer;
 import org.zeroturnaround.zip.transform.ZipEntryTransformer;
+
+import de.geolykt.starloader.obftools.asm.Oaktree;
 
 import cuchaz.enigma.command.DeobfuscateCommand;
 
@@ -84,6 +87,18 @@ public class PostprocessTask extends Jar {
         } catch (Exception e) {
             e.printStackTrace();
             throw new RuntimeException(e);
+        }
+        Oaktree deobfuscator = new Oaktree();
+        try {
+            JarFile jar = new JarFile(targetFinal);
+            deobfuscator.index(jar);
+            jar.close();
+            deobfuscator.fixInnerClasses();
+            FileOutputStream fos = new FileOutputStream(targetFinal);
+            deobfuscator.write(fos);
+            fos.close();
+        } catch (IOException e) {
+            e.printStackTrace();
         }
         targetTemp.delete();
         return WorkResults.didWork(true);

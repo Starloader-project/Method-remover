@@ -3,6 +3,7 @@ package de.geolykt.starloader.obftools;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -22,6 +23,8 @@ import org.zeroturnaround.zip.ZipUtil;
 import org.zeroturnaround.zip.transform.ByteArrayZipEntryTransformer;
 import org.zeroturnaround.zip.transform.ZipEntryTransformer;
 import org.zeroturnaround.zip.transform.ZipEntryTransformerEntry;
+
+import de.geolykt.starloader.obftools.asm.Oaktree;
 
 import cuchaz.enigma.command.ConvertMappingsCommand;
 import cuchaz.enigma.command.DeobfuscateCommand;
@@ -77,14 +80,27 @@ public class ObfToolsPlugin implements Plugin<Project> {
 //                        map.getAbsolutePath(), "intermediary", "named" });*/
 //                net.fabricmc.tinyremapper.Main.main(new String[] { f.getAbsolutePath(), gradleProject.file(INTERMEDIARY_JAR).getAbsolutePath(),
 //                        map.getAbsolutePath(), "official", "intermediary" });
+                File intermediaryJar = gradleProject.file(INTERMEDIARY_JAR);
                 try {
                     new DeobfuscateCommand().run(
                             f.getAbsolutePath(), // input
-                            gradleProject.file(INTERMEDIARY_JAR).getAbsolutePath(), // output
+                            intermediaryJar.getAbsolutePath(), // output
                             map.getAbsolutePath()); // map
                 } catch (Exception e) {
                     e.printStackTrace();
                     throw new RuntimeException(e);
+                }
+                Oaktree deobfuscator = new Oaktree();
+                try {
+                    JarFile jar = new JarFile(intermediaryJar);
+                    deobfuscator.index(jar);
+                    jar.close();
+                    deobfuscator.fixInnerClasses();
+                    FileOutputStream fos = new FileOutputStream(intermediaryJar);
+                    deobfuscator.write(fos);
+                    fos.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
                 }
             }
         });
