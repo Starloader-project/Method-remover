@@ -24,6 +24,8 @@ import org.zeroturnaround.zip.ZipUtil;
 import org.zeroturnaround.zip.transform.ByteArrayZipEntryTransformer;
 import org.zeroturnaround.zip.transform.ZipEntryTransformer;
 
+import cuchaz.enigma.command.DeobfuscateCommand;
+
 public class PostprocessTask extends Jar {
 
     private final ObftoolsExtension extension;
@@ -38,7 +40,7 @@ public class PostprocessTask extends Jar {
     protected CopyAction createCopyAction() {
         File source = getArchiveFile().get().getAsFile();
         File temp = new File(source.getParentFile(), source.getName() + ".temp");
-        File map = new File(source.getParentFile().getParentFile(), ObfToolsPlugin.INTERMEDIARY_MAP);
+        File map = new File(source.getParentFile().getParentFile().getParentFile(), ObfToolsPlugin.INTERMEDIARY_MAP);
         return new TransformedCopyTask(extension.annotation, temp, source, source, map);
     }
 } class TransformedCopyTask implements CopyAction {
@@ -64,14 +66,25 @@ public class PostprocessTask extends Jar {
         } catch (IOException e) {
             e.printStackTrace();
             return WorkResults.didWork(false);
-        }
+        }/*
         net.fabricmc.tinyremapper.Main.main(new String[] {
                 targetTemp.getAbsolutePath(), // srcJar
                 targetFinal.getAbsolutePath(), // outJar
                 mapLocation.getAbsolutePath(), // mappingsFile
-                "official",
-                "intermediary"
-        });
+//                "intermediary",
+//                "named"
+              "official",
+              "intermediary"
+        });*/
+        try {
+            new DeobfuscateCommand().run(
+                    targetTemp.getAbsolutePath(), // input
+                    targetFinal.getAbsolutePath(), // output
+                    mapLocation.getAbsolutePath()); // map
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new RuntimeException(e);
+        }
         targetTemp.delete();
         return WorkResults.didWork(true);
     }
