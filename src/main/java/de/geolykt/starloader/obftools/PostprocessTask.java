@@ -1,8 +1,12 @@
 package de.geolykt.starloader.obftools;
 
 import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.jar.JarFile;
@@ -28,6 +32,7 @@ import org.zeroturnaround.zip.transform.ZipEntryTransformer;
 import de.geolykt.starloader.obftools.asm.Oaktree;
 
 import cuchaz.enigma.command.DeobfuscateCommand;
+import cuchaz.enigma.command.InvertMappingsCommand;
 
 public class PostprocessTask extends Jar {
 
@@ -76,14 +81,19 @@ public class PostprocessTask extends Jar {
                 mapLocation.getAbsolutePath(), // mappingsFile
 //                "intermediary",
 //                "named"
-              "official",
-              "intermediary"
+                "intermediary",
+                "official"
         });*/
+        // We first need to invert the mapping
+        File invertedMap = new File(mapLocation.getParentFile(), mapLocation.getName() + ".inverted");
         try {
+            if (!invertedMap.exists()) {
+                invertMap(mapLocation, invertedMap, false);
+            }
             new DeobfuscateCommand().run(
                     targetTemp.getAbsolutePath(), // input
                     targetFinal.getAbsolutePath(), // output
-                    mapLocation.getAbsolutePath()); // map
+                    invertedMap.getAbsolutePath()); // map
         } catch (Exception e) {
             e.printStackTrace();
             throw new RuntimeException(e);
@@ -102,6 +112,61 @@ public class PostprocessTask extends Jar {
         }
         targetTemp.delete();
         return WorkResults.didWork(true);
+    }
+
+    /**
+     * since {@link InvertMappingsCommand} does not support  writing into the tiny format.
+     * The input map should be in the tiny format and the output map will be in the in the tiny format.
+     * If the output file already exists it will be appended if append is true.
+     * Note: if append is true, then the header might not get written!
+     *
+     * @param sourceMap The original input map
+     * @param invertedMap The output map that is inverted
+     * @param append Whether to append the output file, otherwise it will overwrite it
+     */
+    private void invertMap(File sourceMap, File invertedMap, boolean append) {
+        try {
+            BufferedReader br = new BufferedReader(new FileReader(sourceMap));
+            if (br.readLine() == null) {
+                br.close();
+                return;
+            }
+            if (!invertedMap.exists()) {
+                append = false;
+            }
+            BufferedWriter bw = new BufferedWriter(new FileWriter(invertedMap, append));
+            if (!append) {
+                bw.write("v1\tofficial\tintermediary\n");
+            }
+            String line = br.readLine();
+            while (line != null) {
+                String[] ln = line.split("\t");
+                String oldLine = line;
+                line = br.readLine();
+                if (ln.length < 3) {
+                    bw.newLine();
+                    continue;
+                }
+                if (oldLine.charAt(0) == '#') {
+                    bw.write(oldLine);
+                    bw.newLine();
+                    continue;
+                }
+                for (int i = 0; i < ln.length - 2; i++) {
+                    bw.write(ln[i]);
+                    bw.write('\t');
+                }
+                bw.write(ln[ln.length - 1]);
+                bw.write('\t');
+                bw.write(ln[ln.length - 2]);
+                bw.newLine();
+            }
+            br.close();
+            bw.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new RuntimeException(e);
+        }
     }
 
     private static void transform(String annot, File zip, OutputStream out) {
