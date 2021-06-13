@@ -32,6 +32,7 @@ import net.fabricmc.accesswidener.AccessWidener;
 import net.fabricmc.accesswidener.AccessWidenerReader;
 import net.fabricmc.accesswidener.AccessWidenerVisitor;
 import net.fabricmc.stitch.commands.tinyv2.CommandProposeV2FieldNames;
+import net.fabricmc.stitch.util.FieldNameFinder;
 
 public class ObfToolsPlugin implements Plugin<Project> {
 
@@ -74,8 +75,8 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     command.run(args);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
-                }
-//                doProposeFields(f, map);
+                }*/
+                doProposeFields(f, map);
 //                net.fabricmc.tinyremapper.Main.main(new String[] { f.getAbsolutePath(), gradleProject.file(INTERMEDIARY_JAR).getAbsolutePath(),
 //                        map.getAbsolutePath(), "intermediary", "named" });*/
 //                net.fabricmc.tinyremapper.Main.main(new String[] { f.getAbsolutePath(), gradleProject.file(INTERMEDIARY_JAR).getAbsolutePath(),
@@ -143,13 +144,54 @@ public class ObfToolsPlugin implements Plugin<Project> {
         }
     }
 
+    /**
+     * Proposes new field names (for example enum member names) that can be easily guessed by the computer.
+     *
+     * @param jar The input jar
+     * @param map The input/output map
+     */
+    @SuppressWarnings("deprecation")
     public void doProposeFields(File jar, File map) {
+        try {
+            BufferedWriter bw = new BufferedWriter(new FileWriter(map, true));
+            var generatedFieldNames = new FieldNameFinder().findNames(jar);
+            for (var proposal : generatedFieldNames.entrySet()) {
+                var key = proposal.getKey();
+                String suggestedValue = proposal.getValue();
+                if (key.getName().length() > 2 || key.getName().equals(suggestedValue)) {
+                    // It is unlikely that this entry is obfuscated
+                    continue;
+                }
+                bw.write("FIELD\t");
+                bw.write(key.getOwner());
+                bw.write('\t');
+                bw.write(key.getDesc());
+                bw.write('\t');
+                bw.write(key.getName());
+                bw.write('\t');
+                bw.write(suggestedValue);
+                bw.write('\n');
+//                System.out.println(a.getKey() + " -> " + a.getValue());
+            }
+            bw.close();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Uses the stitch command to propose fields.
+     *
+     * @param jar The input jar
+     * @param map The input map
+     */
+    public void doProposeFieldsStitch(File jar, File map) {
         try {
             File temp = new File(map.getParent(), map.getName().concat(".temp"));
             new ConvertMappingsCommand().run("tiny", map.getAbsolutePath(), "tiny_v2", temp.getAbsolutePath());
             map.delete();
             new CommandProposeV2FieldNames().run(new String[] {jar.getAbsolutePath(), temp.getAbsolutePath(), map.getAbsolutePath(), "true"});
-            temp.delete();
+//            temp.delete();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
