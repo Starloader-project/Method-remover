@@ -8,8 +8,14 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Enumeration;
+import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -59,6 +65,8 @@ public class PostprocessTask extends Jar {
     private final File targetFinal;
     private final File mapLocation;
 
+    private final Collection<Resource> resources = new ArrayList<>();
+
     public TransformedCopyTask(String annotation, File targetTemp, File targetFinal, File source, File mapLocation) {
         this.annotation = annotation;
         this.targetTemp = targetTemp;
@@ -69,21 +77,30 @@ public class PostprocessTask extends Jar {
 
     @Override
     public WorkResult execute(CopyActionProcessingStream stream) {
+        try {
+            JarFile jarFile = new JarFile(src);
+            Enumeration<JarEntry> entries = jarFile.entries();
+            while (entries.hasMoreElements()) {
+                JarEntry e = entries.nextElement();
+                if (!e.getRealName().endsWith(".class")) {
+                    InputStream is = jarFile.getInputStream(e);
+                    resources.add(new Resource(is.readAllBytes(), e.getRealName()));
+                    is.close();
+                }
+            }
+            jarFile.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new RuntimeException(e);
+        }
+
         try (FileOutputStream fos = new FileOutputStream(targetTemp)) {
-            transform(annotation, src, fos);
+            transform(annotation, src, fos); // Apply method-remover
         } catch (IOException e) {
             e.printStackTrace();
             return WorkResults.didWork(false);
-        }/*
-        net.fabricmc.tinyremapper.Main.main(new String[] {
-                targetTemp.getAbsolutePath(), // srcJar
-                targetFinal.getAbsolutePath(), // outJar
-                mapLocation.getAbsolutePath(), // mappingsFile
-//                "intermediary",
-//                "named"
-                "intermediary",
-                "official"
-        });*/
+        }
+
         // We first need to invert the mapping
         File invertedMap = new File(mapLocation.getParentFile(), mapLocation.getName() + ".inverted");
         try {
@@ -104,11 +121,36 @@ public class PostprocessTask extends Jar {
             deobfuscator.index(jar);
             jar.close();
             deobfuscator.fixInnerClasses();
-            FileOutputStream fos = new FileOutputStream(targetFinal);
+            FileOutputStream fos = new FileOutputStream(targetTemp);
             deobfuscator.write(fos);
             fos.close();
         } catch (IOException e) {
             e.printStackTrace();
+        }
+
+        // Copy cached resources back into the jar
+        try {
+            JarFile jarFile = new JarFile(targetTemp);
+            JarOutputStream out = new JarOutputStream(new FileOutputStream(targetFinal));
+            Enumeration<JarEntry> entries = jarFile.entries();
+            while (entries.hasMoreElements()) {
+                JarEntry e = entries.nextElement();
+                out.putNextEntry(e);
+                InputStream is = jarFile.getInputStream(e);
+                is.transferTo(out);
+                is.close();
+                out.closeEntry();
+            }
+            jarFile.close();
+            for (Resource resource : resources) {
+                out.putNextEntry(new JarEntry(resource.getPath()));
+                out.write(resource.getData());
+                out.closeEntry();
+            }
+            out.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new RuntimeException(e);
         }
         targetTemp.delete();
         return WorkResults.didWork(true);
@@ -202,5 +244,22 @@ public class PostprocessTask extends Jar {
                 return input; // Not a valid class file
             }
         };
+    }
+} final class Resource {
+
+    private final byte[] data;
+    private final String path;
+
+    public Resource(byte[] data, String path) {
+        this.data = data;
+        this.path = path;
+    }
+
+    public String getPath() {
+        return path;
+    }
+
+    public byte[] getData() {
+        return data;
     }
 }

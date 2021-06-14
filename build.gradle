@@ -10,7 +10,7 @@ targetCompatibility = 11
 
 group = 'de.geolykt.starloader'
 archivesBaseName = 'obftools'
-def baseVersion = '1.0.0'
+def baseVersion = '1.0.1'
 
 repositories {
     maven {
@@ -40,9 +40,9 @@ dependencies {
 
 gradlePlugin {
     plugins {
-        widenerPlugin {
+        ObfToolsPlugin {
             id = project.archivesBaseName
-            version = '1.0.0'
+            version = '1.0.1'
             implementationClass = 'de.geolykt.starloader.obftools.ObfToolsPlugin'
         }
     }
