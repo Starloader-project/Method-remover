@@ -2,21 +2,17 @@ package de.geolykt.starloader.obftools.asm;
 
 import java.util.Objects;
 
-import org.objectweb.asm.tree.FieldNode;
-
 public class SignatureNode {
 
     protected String generic;
     public final String type;
 
-    public SignatureNode(final String type, String generics) {
+    public SignatureNode(String type, String generics) {
         this.generic = generics;
+        if (type.endsWith(";")) {
+            type = type.substring(0, type.length() - 1);
+        }
         this.type = type;
-    }
-
-    public SignatureNode(FieldNode field) {
-        this.generic = field.signature;
-        this.type = field.desc;
     }
 
     public void setGenerics(String generics) {

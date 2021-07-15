@@ -12,7 +12,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -23,14 +22,11 @@ import java.util.zip.ZipEntry;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
-import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.InnerClassNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LocalVariableNode;
-import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.ParameterNode;
 
@@ -56,18 +52,6 @@ public class Oaktree {
             signature = sig;
         }
     }
-    public static final Set<String> LISTS = new HashSet<>();
-
-    public static final Set<String> LISTS_RAW = new HashSet<>();
-
-    static {
-        LISTS.add("Ljava/utilVector;");
-        LISTS.add("Ljava/util/List;");
-        LISTS.add("Ljava/util/ArrayList;");
-        LISTS_RAW.add("java/utilVector");
-        LISTS_RAW.add("java/util/List");
-        LISTS_RAW.add("java/util/ArrayList");
-    }
 
     public static void main(String[] args) {
         if (args.length < 2) {
@@ -85,7 +69,6 @@ public class Oaktree {
 //            oakTree.printClassInfo();
             oakTree.fixInnerClasses();
             oakTree.fixLVT();
-            oakTree.fixGenerics();
 //            oakTree.printClassInfo();
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
@@ -101,134 +84,6 @@ public class Oaktree {
     private final List<FieldSignatureEntry> signatureEntries = new ArrayList<>();
 
     public Oaktree() {
-    }
-
-    @Deprecated
-    public void fixGenerics() {
-        Map<String, List<FieldSignatureEntry>> lookup = new HashMap<>();
-        for (FieldSignatureEntry e : signatureEntries) {
-            if (!lookup.containsKey(e.owner)) {
-                lookup.put(e.owner, new ArrayList<>());
-            }
-            lookup.get(e.owner).add(e);
-        }
-        for (ClassNode node : nodes) {
-            List<FieldSignatureEntry> entries = lookup.get(node.name);
-            if (entries == null || entries.isEmpty()) {
-                continue;
-            }
-            for (FieldSignatureEntry e : entries) {
-                for (FieldNode field : node.fields) {
-                    if (field.name.equals(e.name) && field.desc.equals(e.desc)) {
-                        field.signature = e.signature;
-                    }
-                }
-            }
-        }
-    }
-    @Deprecated // Does not work, but included if anyone wants to fix it (I will eventually fix it, but that will take quite a while)
-    public void fixGenericsGuessing() {
-        List<FieldNode> lists = new ArrayList<>();
-        List<SignatureNode> listsSignatures = new ArrayList<>();
-        HashMap<String, String> superclasses = new HashMap<>();
-        HashMap<String, List<String>> interfaces = new HashMap<>();
-        HashMap<String, ClassNode> classNodes = new HashMap<>();
-        System.out.println("Field generics fixup: Indexing fields");
-        for (ClassNode node : nodes) {
-            superclasses.put(node.name, node.superName);
-            classNodes.put(node.name, node);
-            interfaces.put(node.name, node.interfaces);
-            for (FieldNode field : node.fields) {
-                if (field.signature == null && LISTS.contains(field.desc)) {
-                    lists.add(field);
-                    listsSignatures.add(new SignatureNode(field));
-                }
-//                System.out.printf("Class %s\t Field %s\t Has description %s and signature %s\n", node.name, field.name, field.desc, field.signature);
-            }
-        }
-
-        // ---------------------------- LISTS ---------------------------- //
-
-        Map<FieldRefTriplet, List<FieldRefTriplet>> listRefs = new HashMap<>();
-        System.out.println("Field generics fixup: Indexing references");
-        for (ClassNode node : nodes) {
-            for (MethodNode method : node.methods) {
-                for (AbstractInsnNode instruction : method.instructions) {
-                    if (instruction instanceof MethodInsnNode) {
-                        MethodInsnNode instructionNode = (MethodInsnNode) instruction;
-//                        System.out.printf("%s,%s\n", instructionNode.owner, instructionNode.desc);
-                        AbstractInsnNode previous = instruction.getPrevious();
-                        if (LISTS_RAW.contains(instructionNode.owner) && previous != null) {
-                            switch (instructionNode.name) {
-                            case "add":
-                                // TODO also allow other ways of obtaining the variable
-                                if (instructionNode.desc.equals("(Ljava/lang/Object;)Z") && previous instanceof FieldInsnNode) {
-                                    AbstractInsnNode listIsn = previous.getPrevious();
-                                    if (listIsn instanceof FieldInsnNode) {
-                                        FieldRefTriplet listRef = new FieldRefTriplet((FieldInsnNode) listIsn);
-                                        FieldRefTriplet varRef = new FieldRefTriplet((FieldInsnNode) previous);
-                                        if (!listRefs.containsKey(listRef)) {
-                                            listRefs.put(listRef, new ArrayList<>());
-                                        }
-                                        listRefs.get(listRef).add(varRef);
-                                        System.out.println("Referenced cleanly.");
-                                    } else {
-                                        // Not yet supported; TODO implement
-                                    }
-                                    System.out.println("Referenced.");
-                                }
-                                break;
-                            case "remove":
-                                if (instructionNode.desc.equals("(Ljava/lang/Object;)Z")) {
-                                    // TODO implement (this is rarely called, so we might as well come clear by not using it)
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        System.out.println("Field generics fixup: Guessing generics"); // It really is just guessing
-
-        for (Map.Entry<FieldRefTriplet, List<FieldRefTriplet>> entry : listRefs.entrySet()) {
-            FieldRefTriplet remappingField = entry.getKey();
-            ClassNode parentNode = classNodes.get(remappingField.owner);
-            System.out.println("Remapping " + remappingField.toString());
-            if (parentNode == null) {
-                System.err.printf(Locale.ROOT, "%s does not have a known ClassNode parent. Skipping.", remappingField.toString());
-                continue;
-            }
-            FieldNode fieldNode = null;
-            for (FieldNode field : parentNode.fields) {
-                if (field.name.equals(remappingField.name) && field.desc.equals(remappingField.desc)) {
-                    fieldNode = field;
-                    break;
-                }
-            }
-            if (fieldNode == null) {
-                System.err.printf(Locale.ROOT, "%s was not found within it's ClassNode parent. Skipping.", remappingField.toString());
-                continue;
-            }
-            if (fieldNode.signature != null) {
-                continue; // Already mapped
-            }
-            List<Set<String>> candidates = new ArrayList<>();
-            for (int i = 0; i < entry.getValue().size(); i++) {
-                Set<String> c = new HashSet<>();
-                putCandidates(entry.getValue().get(i), c, superclasses, interfaces);
-                candidates.add(i, c);
-            }
-            List<String> commonCandidates = new ArrayList<>(candidates.get(0));
-            for (int i = 1; i < candidates.size(); i++) {
-                final int n = i;
-                commonCandidates.removeIf(s -> !candidates.get(n).contains(s));
-            }
-            String candidate = getCandidate(commonCandidates, superclasses, interfaces);
-            if (candidate != null) {
-                fieldNode.signature = new SignatureNode(fieldNode.desc, candidate).toString();
-            }
-        }
     }
 
     /**
@@ -400,40 +255,25 @@ public class Oaktree {
                 LabelNode start = new LabelNode();
                 LabelNode end = new LabelNode();
                 for (int i = 0; i < params.size(); i++) {
+                    String type = description.nextType();
                     LocalVariableNode a = new LocalVariableNode(params.get(i).name,
-                            description.nextType(),
+                            type,
                             null, // we can only guess about the signature, so it'll be null
                             start,
                             end,
-                            localVariableIndex++);
+                            localVariableIndex);
+                    char c = type.charAt(0);
+                    if (c == 'D' || c == 'J') {
+                        // doubles and longs take two frames on the stack. Makes sense, I know
+                        localVariableIndex += 2;
+                    } else {
+                        localVariableIndex++;
+                    }
                     locals.add(a);
                 }
             }
         }
         System.out.printf("Resolved LVT conflicts! (%d ms)\n", System.currentTimeMillis() - startTime);
-    }
-
-    private String getCandidate(List<String> candidates, Map<String, String> supers, Map<String, List<String>> interfaces) {
-        if (candidates.isEmpty()) {
-            return null;
-        }
-        if (candidates.size() == 1) {
-            return candidates.get(0);
-        }
-        // Try find the most advanced common candidate within the class hierarchy
-        List<String> clone = new ArrayList<>(candidates);
-        for (String s : candidates) {
-            clone.remove(supers.get(s));
-            List<String> toRemove = interfaces.get(s);
-            if (toRemove != null) {
-                clone.removeAll(toRemove);
-            }
-        }
-        if (clone.size() != 1) {
-            return clone.get(0);
-        }
-        System.out.println("multi");
-        return null; // Multiple candidates, likely not enough input data
     }
 
     public void index(JarFile file) {
@@ -488,18 +328,6 @@ public class Oaktree {
             for (InnerClassNode clazzNode : node.innerClasses) {
                 System.out.println("Inner class: " + clazzNode.innerName + "; Outer class: " + clazzNode.outerName + "; Intern Name: " + clazzNode.name + "; Access: " + clazzNode.access);
             }
-        }
-    }
-
-    private void putCandidates(FieldRefTriplet triplet, Set<String> candidates, Map<String, String> supers, Map<String, List<String>> interfaces) {
-        String owner = triplet.owner;
-        while (owner != null) {
-            candidates.add(owner);
-            List<String> toAdd = interfaces.get(owner);
-            if (toAdd != null) {
-                candidates.addAll(toAdd);
-            }
-            owner = supers.get(owner);
         }
     }
 
