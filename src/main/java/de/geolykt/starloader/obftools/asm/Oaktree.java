@@ -1,9 +1,6 @@
 package de.geolykt.starloader.obftools.asm;
 
-import java.io.BufferedReader;
-import java.io.File;
 import java.io.FileOutputStream;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -22,13 +19,21 @@ import java.util.zip.ZipEntry;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.InnerClassNode;
+import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
+import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.LocalVariableNode;
+import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.ParameterNode;
+import org.objectweb.asm.tree.TypeInsnNode;
+import org.objectweb.asm.tree.VarInsnNode;
 
 /**
  * Primitive class metadata recovery tool.
@@ -39,19 +44,40 @@ import org.objectweb.asm.tree.ParameterNode;
  */
 public class Oaktree {
 
-    public static class FieldSignatureEntry {
-        public final String desc;
-        public final String name;
-        public final String owner;
-        public final String signature;
+    /**
+     * A hardcoded set of implementations of the Iterable interface that apply for
+     * generics checking later on.
+     */
+    public static final Set<String> ITERABLES = new HashSet<>() {
+        private static final long serialVersionUID = -3779578266088390365L;
 
-        public FieldSignatureEntry(String clazz, String name, String desc, String sig) {
-            owner = clazz;
-            this.name = name;
-            this.desc = desc;
-            signature = sig;
+        {
+            add("Ljava/util/Vector;");
+            add("Ljava/util/List;");
+            add("Ljava/util/ArrayList;");
+            add("Ljava/lang/Iterable;");
+            add("Ljava/util/Collection;");
+            add("Ljava/util/AbstractCollection;");
+            add("Ljava/util/AbstractList;");
+            add("Ljava/util/AbstractSet;");
+            add("Ljava/util/AbstractQueue;");
+            add("Ljava/util/HashSet;");
+            add("Ljava/util/Set;");
+            add("Ljava/util/Queue;");
+            add("Ljava/util/concurrent/ArrayBlockingQueue;");
+            add("Ljava/util/concurrent/ConcurrentLinkedQueue;");
+            add("Ljava/util/concurrent/ConcurrentLinkedQueue;");
+            add("Ljava/util/concurrent/DelayQueue;");
+            add("Ljava/util/concurrent/LinkedBlockingQueue;");
+            add("Ljava/util/concurrent/SynchronousQueue;");
+            add("Ljava/util/concurrent/BlockingQueue;");
+            add("Ljava/util/concurrent/BlockingDeque;");
+            add("Ljava/util/concurrent/LinkedBlockingDeque;");
+            add("Ljava/util/concurrent/ConcurrentLinkedDeque;");
+            add("Ljava/util/Deque;");
+            add("Ljava/util/ArrayDeque;");
         }
-    }
+    };
 
     public static void main(String[] args) {
         if (args.length < 2) {
@@ -62,13 +88,10 @@ public class Oaktree {
             Oaktree oakTree = new Oaktree();
             JarFile file = new JarFile(args[0]);
             oakTree.index(file);
-            for (int i = 2; i < args.length; i++) {
-                oakTree.indexSignatureFields(new File(args[i]));
-            }
             file.close();
 //            oakTree.printClassInfo();
             oakTree.fixInnerClasses();
-            oakTree.fixLVT();
+            oakTree.fixParameterLVT();
 //            oakTree.printClassInfo();
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
@@ -80,8 +103,6 @@ public class Oaktree {
     }
 
     private final List<ClassNode> nodes = new ArrayList<>();
-
-    private final List<FieldSignatureEntry> signatureEntries = new ArrayList<>();
 
     public Oaktree() {
     }
@@ -221,7 +242,7 @@ public class Oaktree {
      * but might not be usefull for less naive decompilers such as procyon, which do not decompile
      * into incoherent java code if the LVT is damaged.
      */
-    public void fixLVT() {
+    public void fixParameterLVT() {
         System.out.println("Resolving LVT conflicts...");
         long startTime = System.currentTimeMillis();
         for (ClassNode node : nodes) {
@@ -276,6 +297,183 @@ public class Oaktree {
         System.out.printf("Resolved LVT conflicts! (%d ms)\n", System.currentTimeMillis() - startTime);
     }
 
+    /**
+     * Guesses the generic signatures of fields based on their usage. This might be inaccurate under
+     * some circumstances, however it tries to play it as safe as possible.
+     * The main algorithm in this method checks for generics via foreach iteration over the field
+     * and searches for the CHECKCAST to determine the signature.
+     * Note: this method should be invoked AFTER {@link #fixParameterLVT()}, invoking this method before it
+     * would lead to LVT fixing not working properly
+     */
+    public void guessFieldGenerics() {
+        Map<Map.Entry<String, Map.Entry<String, String>>, SignatureNode> newFieldSignatures = new HashMap<>();
+        int addedFieldSignatures = 0;
+
+        System.out.println("Starting guessing field signatures...");
+        long startTime = System.currentTimeMillis();
+        // index signatureless fields
+        for (ClassNode node : nodes) {
+            for (FieldNode field : node.fields) {
+                if (field.signature == null && ITERABLES.contains(field.desc)) {
+                    newFieldSignatures.put(Map.entry(node.name, Map.entry(field.name, field.desc)), null);
+                }
+            }
+        }
+
+        // guess signatures based on iterators
+        for (ClassNode node : nodes) {
+            for (MethodNode method : node.methods) {
+                AbstractInsnNode instruction = method.instructions.getFirst();
+                while (instruction != null) {
+                    if (instruction instanceof FieldInsnNode) {
+                        FieldInsnNode fieldNode = (FieldInsnNode) instruction;
+                        var key = Map.entry(fieldNode.owner, Map.entry(fieldNode.name, fieldNode.desc));
+                        AbstractInsnNode next = instruction.getNext();
+                        if (!newFieldSignatures.containsKey(key) // The field doesn't actively search for a new signature
+                                || !(next instanceof MethodInsnNode)) { // We cannot work with this instruction
+                            instruction = next;
+                            continue;
+                        }
+                        MethodInsnNode iteratorMethod = (MethodInsnNode) next;
+                        next = next.getNext();
+                        // check whether the called method is Iterable#iterator
+                        if (iteratorMethod.itf // definitely not it
+                                || !iteratorMethod.name.equals("iterator")
+                                || !iteratorMethod.desc.equals("()Ljava/util/Iterator;")
+                                || !(next instanceof VarInsnNode)) { // We cannot work with this instruction
+                            instruction = next;
+                            continue;
+                        }
+                        // cache instruction for later. This instruction should store the iterator that was just obtained
+                        VarInsnNode storeInstruction = (VarInsnNode) next;
+                        next = next.getNext();
+                        if (!(next instanceof LabelNode)) { // this is the label that marks the beginning of the loop
+                            instruction = next;
+                            continue;
+                        }
+                        LabelNode loopStartLabel = (LabelNode) next;
+                        next = next.getNext();
+                        while ((next instanceof FrameNode) || (next instanceof LineNumberNode)) {
+                            // filter out pseudo-instructions
+                            next = next.getNext();
+                        }
+                        if (!(next instanceof VarInsnNode)) { // require the load instruction where the iterator will be obtained again
+                            instruction = next;
+                            continue;
+                        }
+                        VarInsnNode loadInstruction = (VarInsnNode) next;
+                        next = next.getNext();
+                        if (loadInstruction.var != storeInstruction.var // both instruction should load/save the same local
+                                || loadInstruction.getOpcode() != Opcodes.ALOAD // the load instruction should actually load
+                                || storeInstruction.getOpcode() != Opcodes.ASTORE // and the store instruction should actually store
+                                || !(next instanceof MethodInsnNode)) { // we cannot work with this instruction
+                            instruction = next;
+                            continue;
+                        }
+                        MethodInsnNode hasNextInstruction = (MethodInsnNode) next;
+                        next = next.getNext();
+                        if (!hasNextInstruction.itf // iterator is an interface
+                                || !hasNextInstruction.owner.equals("java/util/Iterator") // check whether this is the right method
+                                || !hasNextInstruction.name.equals("hasNext")
+                                || !hasNextInstruction.desc.equals("()Z")
+                                || !(next instanceof JumpInsnNode)) { // it is pretty clear that this is a while loop now, but we have this for redundancy anyways
+                            instruction = next;
+                            continue;
+                        }
+                        JumpInsnNode loopEndJump = (JumpInsnNode) next;
+                        LabelNode loopEndLabel = loopEndJump.label;
+                        next = next.getNext();
+                        if (!(next instanceof VarInsnNode)) { // require the load instruction where the iterator will be obtained again
+                            instruction = next;
+                            continue;
+                        }
+                        // redo the load instruction check
+                        loadInstruction = (VarInsnNode) next;
+                        next = next.getNext();
+                        if (loadInstruction.var != storeInstruction.var // both instruction should load/save the same local
+                                || loadInstruction.getOpcode() != Opcodes.ALOAD // the load instruction should actually load
+                                || storeInstruction.getOpcode() != Opcodes.ASTORE // and the store instruction should actually store
+                                || !(next instanceof MethodInsnNode)) { // we cannot work with this instruction
+                            instruction = next;
+                            continue;
+                        }
+                        MethodInsnNode getNextInstruction = (MethodInsnNode) next;
+                        next = next.getNext();
+                        if (!getNextInstruction.itf // iterator is an interface
+                                || !getNextInstruction.owner.equals("java/util/Iterator") // check whether this is the right method
+                                || !getNextInstruction.name.equals("next")
+                                || !getNextInstruction.desc.equals("()Ljava/lang/Object;")
+                                || !(next instanceof TypeInsnNode)) { // this instruction is the core of our check, and the holy grail - sadly it wasn't here. Hopefully we have better luck next time
+                            instruction = next;
+                            continue;
+                        }
+                        TypeInsnNode checkCastInstruction = (TypeInsnNode) next;
+                        next = next.getNext();
+                        if (checkCastInstruction.getOpcode() != Opcodes.CHECKCAST) {
+                            // so close!
+                            instruction = next;
+                            continue;
+                        }
+                        String suggestion = "L" + checkCastInstruction.desc + ";";
+                        SignatureNode suggestedSignature = new SignatureNode(fieldNode.desc, suggestion);
+                        SignatureNode currentlySuggested = newFieldSignatures.get(key);
+                        instruction = next;
+                        if (currentlySuggested != null) {
+                            if (!suggestedSignature.equals(currentlySuggested)) {
+                                addedFieldSignatures--;
+                                System.out.println("Contested signatures for " + key);
+                                newFieldSignatures.remove(key);
+                                continue;
+                            }
+                        } else {
+                            addedFieldSignatures++;
+                            newFieldSignatures.put(key, suggestedSignature);
+                        }
+
+                        // Add arbitrary LVT entries to reduce the amount of <unknown>
+                        if (!(next instanceof VarInsnNode) || next.getOpcode() != Opcodes.ASTORE) {
+                            // We don't have a variable to attach anything to (???) - not critical, so shrug
+                            continue;
+                        }
+                        VarInsnNode iteratedObject = (VarInsnNode) next;
+                        List<LocalVariableNode> localVars = method.localVariables;
+                        boolean alreadyDeclaredLVT = false;
+                        for (LocalVariableNode var0 : localVars) {
+                            if (var0.index == iteratedObject.var && var0.desc.equals(suggestion)) {
+                                alreadyDeclaredLVT = true;
+                                break;
+                            }
+                        }
+                        if (!alreadyDeclaredLVT) {
+                            // add LVT entry for the iterator
+                            LocalVariableNode lvtNode = new LocalVariableNode(
+                                    "var" + iteratedObject.var, suggestion,
+                                    null,
+                                    loopStartLabel, loopEndLabel, iteratedObject.var);
+                            localVars.add(lvtNode);
+                        }
+                        continue;
+                    }
+                    instruction = instruction.getNext();
+                }
+            }
+        }
+        System.out.printf("Guessed %d field signatures! (%d ms)\n", addedFieldSignatures, System.currentTimeMillis() - startTime);
+
+        for (ClassNode node : nodes) {
+            for (FieldNode field : node.fields) {
+                if (field.signature == null && ITERABLES.contains(field.desc)) {
+                    SignatureNode result = newFieldSignatures.get(Map.entry(node.name, Map.entry(field.name, field.desc)));
+                    if (result == null) {
+                        //System.out.println("Unable to find signature for : " + node.name + "." + field.name);
+                    } else {
+                        field.signature = result.toString();
+                    }
+                }
+            }
+        }
+    }
+
     public void index(JarFile file) {
         System.out.println("Indexing class files...");
         file.entries().asIterator().forEachRemaining(entry -> {
@@ -295,31 +493,6 @@ public class Oaktree {
             }
         });
         System.out.println("Indexed class files!");
-    }
-
-    @Deprecated // not working as intended, if at all
-    public void indexSignatureFields(File file) throws IOException {
-        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
-            String ln = br.readLine();
-            while (ln != null) {
-                ln = ln.split("#")[0].strip();
-                if (ln.length() == 0) {
-                    ln = br.readLine();
-                    continue;
-                }
-                String[] splits = ln.split(" ");
-                String[] fsplits = new String[4];
-                int j = 0;
-                for (int i = 0; i < splits.length; i++) {
-                    if (!splits[i].isBlank()) {
-                        fsplits[j++] = splits[i];
-                    }
-                }
-                signatureEntries.add(new FieldSignatureEntry(splits[0], splits[1], splits[2], splits[3]));
-                ln = br.readLine();
-            }
-            br.close();
-        }
     }
 
     public void printClassInfo() {

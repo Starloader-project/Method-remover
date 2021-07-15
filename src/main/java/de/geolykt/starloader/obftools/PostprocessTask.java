@@ -121,7 +121,8 @@ public class PostprocessTask extends Jar {
             deobfuscator.index(jar);
             jar.close();
             deobfuscator.fixInnerClasses();
-            deobfuscator.fixLVT();
+            deobfuscator.fixParameterLVT();
+            deobfuscator.guessFieldGenerics();
             FileOutputStream fos = new FileOutputStream(targetTemp);
             deobfuscator.write(fos);
             fos.close();

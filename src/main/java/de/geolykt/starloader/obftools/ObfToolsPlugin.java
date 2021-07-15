@@ -97,7 +97,8 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.index(jar);
                     jar.close();
                     deobfuscator.fixInnerClasses();
-                    deobfuscator.fixLVT();
+                    deobfuscator.fixParameterLVT();
+                    deobfuscator.guessFieldGenerics();
                     FileOutputStream fos = new FileOutputStream(intermediaryJar);
                     deobfuscator.write(fos);
                     fos.close();
