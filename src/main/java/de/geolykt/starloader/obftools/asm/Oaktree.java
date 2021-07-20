@@ -92,6 +92,8 @@ public class Oaktree {
 //            oakTree.printClassInfo();
             oakTree.fixInnerClasses();
             oakTree.fixParameterLVT();
+            oakTree.guessFieldGenerics();
+            oakTree.fixSwitchMaps(true);
 //            oakTree.printClassInfo();
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
@@ -295,6 +297,112 @@ public class Oaktree {
             }
         }
         System.out.printf("Resolved LVT conflicts! (%d ms)\n", System.currentTimeMillis() - startTime);
+    }
+
+    /**
+     * Method that tries to restore the SwitchMaps to how they should be.
+     * This includes marking the switchmap classes as anonymous classes, so they may not be referenceable
+     * afterwards.
+     *
+     * @param doLogging Whether to put anything to sysout for logging
+     */
+    public void fixSwitchMaps(boolean doLogging) {
+        if (doLogging) {
+            System.out.println("Starting to resolve switch-on-enum switchmap classes...");
+        }
+        Map<FieldReference, String> deobfNames = new HashMap<>(); // The deobf name will be something like $SwitchMap$org$bukkit$Material
+        long startTime = System.currentTimeMillis();
+
+        // index switch map classes - or at least their candidates
+        for (ClassNode node : nodes) {
+            if (node.superName != null && node.superName.equals("java/lang/Object")) {
+                if (node.fields.size() == 1 && node.methods.size() == 1) {
+                    MethodNode method = node.methods.get(0);
+                    FieldNode field = node.fields.get(0);
+                    if (method.name.equals("<clinit>") && method.desc.equals("()V")
+                            && field.desc.equals("[I")
+                            && (field.access & Opcodes.ACC_STATIC) != 0) {
+                        FieldReference fieldRef = new FieldReference(node.name, field);
+                        String enumName = null;
+                        AbstractInsnNode instruction = method.instructions.getFirst();
+                        while (instruction != null) {
+                            if (instruction instanceof FieldInsnNode && instruction.getOpcode() == Opcodes.GETSTATIC) {
+                                FieldInsnNode fieldInstruction = (FieldInsnNode) instruction;
+                                if (fieldRef.equals(new FieldReference(fieldInstruction))) {
+                                    AbstractInsnNode next = instruction.getNext();
+                                    while (next instanceof FrameNode || next instanceof LabelNode) {
+                                        // ASM is sometimes not so nice
+                                        next = next.getNext();
+                                    }
+                                    if (next instanceof FieldInsnNode && next.getOpcode() == Opcodes.GETSTATIC) {
+                                        if (enumName == null) {
+                                            enumName = ((FieldInsnNode) next).owner;
+                                        } else if (!enumName.equals(((FieldInsnNode) next).owner)) {
+                                            enumName = null;
+                                            break; // It may not be a switchmap field
+                                        }
+                                    }
+                                }
+                            }
+                            instruction = instruction.getNext();
+                        }
+                        if (enumName != null) {
+                            if (fieldRef.getName().indexOf('$') == -1) {
+                                // The deobf name will be something like $SwitchMap$org$bukkit$Material
+                                String newName = "$SwitchMap$" + enumName.replace('/', '$');
+                                deobfNames.put(fieldRef, newName);
+                                instruction = method.instructions.getFirst();
+                                // Remap references within this class
+                                while (instruction != null) {
+                                    if (instruction instanceof FieldInsnNode) {
+                                        FieldInsnNode fieldInsn = (FieldInsnNode) instruction;
+                                        if ((fieldInsn.getOpcode() == Opcodes.GETSTATIC || fieldInsn.getOpcode() == Opcodes.PUTSTATIC)
+                                                && fieldInsn.owner.equals(node.name)
+                                                && fieldRef.equals(new FieldReference(fieldInsn))) {
+                                            fieldInsn.name = newName;
+                                        }
+                                    }
+                                    instruction = instruction.getNext();
+                                }
+                                // Remap the actual field declaration
+                                // Switch maps can only contain a single field and we have already obtained said field, so it isn't much of a deal here
+                                field.name = newName;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Rename references to the field
+        for (ClassNode node : nodes) {
+            Set<String> addedInnerClassNodes = new HashSet<>();
+            for (MethodNode method : node.methods) {
+                AbstractInsnNode instruction = method.instructions.getFirst();
+                while (instruction != null) {
+                    if (instruction instanceof FieldInsnNode && instruction.getOpcode() == Opcodes.GETSTATIC) {
+                        FieldInsnNode fieldInstruction = (FieldInsnNode) instruction;
+                        if (fieldInstruction.owner.equals(node.name)) { // I have no real idea what I was doing here
+                            instruction = instruction.getNext();
+                            continue;
+                        }
+                        FieldReference fRef = new FieldReference(fieldInstruction);
+                        String newName = deobfNames.get(fRef);
+                        if (newName != null) {
+                            fieldInstruction.name = newName;
+                            if (!addedInnerClassNodes.contains(fRef.getOwner())) {
+                                node.innerClasses.add(new InnerClassNode(fRef.getOwner(), node.name, null, Opcodes.ACC_STATIC ^ Opcodes.ACC_SYNTHETIC ^ Opcodes.ACC_FINAL));
+                            }
+                        }
+                    }
+                    instruction = instruction.getNext();
+                }
+            }
+        }
+
+        if (doLogging) {
+            System.out.printf("Recovered %d switch-on-enum switchmap classes! (%d ms)\n", deobfNames.size(), System.currentTimeMillis() - startTime);
+        }
     }
 
     /**

@@ -99,6 +99,7 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.fixInnerClasses();
                     deobfuscator.fixParameterLVT();
                     deobfuscator.guessFieldGenerics();
+                    deobfuscator.fixSwitchMaps(true);
                     FileOutputStream fos = new FileOutputStream(intermediaryJar);
                     deobfuscator.write(fos);
                     fos.close();

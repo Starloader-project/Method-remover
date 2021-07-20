@@ -37,6 +37,9 @@ dependencies {
     implementation "cuchaz:enigma-cli:0.27.3" // Mappings conversion
     implementation "de.geolykt.starloader:stitch:0.6.1" // Mappings generation
     implementation "de.geolykt.starloader:access-widener:2.0.0" // Access widening technologies
+
+    // https://mvnrepository.com/artifact/org.jetbrains/annotations
+    implementation group: 'org.jetbrains', name: 'annotations', version: '20.1.0'
 }
 
 gradlePlugin {
