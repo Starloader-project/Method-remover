@@ -315,7 +315,7 @@ public class Oaktree {
 
         // index switch map classes - or at least their candidates
         for (ClassNode node : nodes) {
-            if (node.superName != null && node.superName.equals("java/lang/Object")) {
+            if (node.superName != null && node.superName.equals("java/lang/Object") && node.interfaces.isEmpty()) {
                 if (node.fields.size() == 1 && node.methods.size() == 1) {
                     MethodNode method = node.methods.get(0);
                     FieldNode field = node.fields.get(0);
@@ -459,7 +459,8 @@ public class Oaktree {
                             instruction = next;
                             continue;
                         }
-                        LabelNode loopStartLabel = (LabelNode) next;
+                        // I *might* use this later, but right now we do not
+                        // LabelNode loopStartLabel = (LabelNode) next;
                         next = next.getNext();
                         while ((next instanceof FrameNode) || (next instanceof LineNumberNode)) {
                             // filter out pseudo-instructions
@@ -553,11 +554,23 @@ public class Oaktree {
                             }
                         }
                         if (!alreadyDeclaredLVT) {
+                            // Quiltflower has a bug where it does not correctly identify LVT entires
+                            // and acts as if they weren't there. This preciesely occours as the decompiler
+                            // expects that the start label provided by of the LVT entry is equal to the first declaration of the
+                            // entry. While I have already brought forward a fix for this, unfortunately this results in a few other
+                            // (more serious) issues that result in formerly broken but technically correct and compileable code
+                            // being uncompileable. This makes it unlikely that the fix would be pushed anytime soon.
+                            // My assumption is that this has something to do with another bug in the decompiler,
+                            // but in the meantime I guess that we will have to work around this bug by adding a LabelNode
+                            // just before the first astore operation.
+                            // Developers have to make sacrifices to attain perfection after all
+                            LabelNode firstDeclaration = new LabelNode();
+                            method.instructions.insertBefore(iteratedObject, firstDeclaration);
                             // add LVT entry for the iterator
                             LocalVariableNode lvtNode = new LocalVariableNode(
                                     "var" + iteratedObject.var, suggestion,
                                     null,
-                                    loopStartLabel, loopEndLabel, iteratedObject.var);
+                                    firstDeclaration, loopEndLabel, iteratedObject.var);
                             localVars.add(lvtNode);
                         }
                         continue;
