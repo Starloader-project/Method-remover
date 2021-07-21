@@ -25,6 +25,7 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.InnerClassNode;
+import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LineNumberNode;
@@ -94,6 +95,7 @@ public class Oaktree {
             oakTree.fixParameterLVT();
             oakTree.guessFieldGenerics();
             oakTree.fixSwitchMaps(true);
+            oakTree.fixForeachOnArray(true);
 //            oakTree.printClassInfo();
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
@@ -107,6 +109,223 @@ public class Oaktree {
     private final List<ClassNode> nodes = new ArrayList<>();
 
     public Oaktree() {
+    }
+
+    /**
+     * Resolve useless &lt;unknown&gt; mentions when quiltflower decompiles foreach loops that
+     * loop on arrays by adding their respective LVT entries via guessing.
+     * However since this requires the knowledge fo the array type, this may not always be successfull.
+     *<br/>
+     * As this modifies the LVT entries, it should be called AFTER {@link #fixParameterLVT()}.
+     *
+     * @param doLog Whether to perform any logging operations
+     */
+    public void fixForeachOnArray(boolean doLog) {
+        int addedLVTs = 0;
+        if (doLog) {
+            System.out.println("Resolving loop on array LVTs...");
+        }
+        long startTime = System.currentTimeMillis();
+
+        for (ClassNode node : nodes) {
+            for (MethodNode method : node.methods) {
+                AbstractInsnNode instruction = method.instructions.getFirst();
+                while (instruction != null) {
+                    if (instruction instanceof VarInsnNode && OPHelper.isVarStore(instruction.getOpcode())) {
+                        VarInsnNode arrayStore = (VarInsnNode) instruction;
+                        AbstractInsnNode next = arrayStore.getNext();
+                        // Ensure that the variable that was just stored is reloaded again
+                        if (!(next instanceof VarInsnNode && OPHelper.isVarLoad(next.getOpcode())
+                                && ((VarInsnNode) next).var == arrayStore.var)) {
+                            instruction = next;
+                            continue;
+                        }
+                        // the array length needs to be obtained & stored
+                        next = next.getNext();
+                        if (!(next instanceof InsnNode && next.getOpcode() == Opcodes.ARRAYLENGTH)) {
+                            instruction = next;
+                            continue;
+                        }
+                        next = next.getNext();
+                        if (!(next instanceof VarInsnNode && next.getOpcode() == Opcodes.ISTORE)) {
+                            instruction = next;
+                            continue;
+                        }
+                        VarInsnNode arrayLengthStore = (VarInsnNode) next;
+                        next = next.getNext();
+                        // the array index needs to be initialized and stored
+                        if (!(next instanceof InsnNode && next.getOpcode() == Opcodes.ICONST_0)) {
+                            // is not the init process
+                            instruction = next;
+                            continue;
+                        }
+                        next = next.getNext();
+                        if (!(next instanceof VarInsnNode && next.getOpcode() == Opcodes.ISTORE)) {
+                            // does not store the loop index
+                            instruction = next;
+                            continue;
+                        }
+                        VarInsnNode indexStore = (VarInsnNode) next;
+                        next = next.getNext();
+                        // This is the loop starting point
+                        while (next instanceof FrameNode || next instanceof LabelNode) {
+                            next = next.getNext();
+                        }
+                        // The index needs to be loaded and compared do the array length
+                        if (!(next instanceof VarInsnNode && next.getOpcode() == Opcodes.ILOAD
+                                && ((VarInsnNode)next).var == indexStore.var)) {
+                            instruction = next;
+                            continue;
+                        }
+                        next = next.getNext();
+                        if (!(next instanceof VarInsnNode && next.getOpcode() == Opcodes.ILOAD
+                                && ((VarInsnNode)next).var == arrayLengthStore.var)) {
+                            instruction = next;
+                            continue;
+                        }
+                        next = next.getNext();
+                        // The end of the loop statement
+                        if (!(next instanceof JumpInsnNode && next.getOpcode() == Opcodes.IF_ICMPGE)) {
+                            instruction = next;
+                            continue;
+                        }
+                        JumpInsnNode jumpToEnd = (JumpInsnNode) next;
+                        next = next.getNext();
+                        // obtain array & loop index
+                        if (!(next instanceof VarInsnNode && OPHelper.isVarLoad(next.getOpcode())
+                                && ((VarInsnNode)next).var == arrayStore.var)) {
+                            instruction = next;
+                            continue;
+                        }
+                        VarInsnNode arrayLoad = (VarInsnNode) next;
+                        next = next.getNext();
+                        if (!(next instanceof VarInsnNode && next.getOpcode() == Opcodes.ILOAD
+                                && ((VarInsnNode)next).var == indexStore.var)) {
+                            instruction = next;
+                            continue;
+                        }
+                        next = next.getNext();
+                        // it should now proceed to actually obtain the referenced object
+                        if (!(next instanceof InsnNode && OPHelper.isArrayLoad(next.getOpcode())
+                                && OPHelper.isVarSimilarType(next.getOpcode(), arrayLoad.getOpcode()))) {
+                            instruction = next;
+                            continue;
+                        }
+                        next = next.getNext();
+                        if (!(next instanceof VarInsnNode && OPHelper.isVarStore(next.getOpcode())
+                                && OPHelper.isVarSimilarType(next.getOpcode(), arrayStore.getOpcode()))) {
+                            instruction = next;
+                            continue;
+                        }
+                        VarInsnNode objectStore = (VarInsnNode) next;
+                        next = next.getNext();
+                        instruction = next; // There may be nested loops - we want to take a lookout for them
+                        // This is now defenitely a for loop on an array. This does not mean however
+                        // that it is a foreach loop, which is the kind of loop we were searching for.
+                        // There is at least one operation that invalidate the use of a foreach loop:
+                        // - obtaining the loop index
+                        // Obtaining the array contents might be another issue, but I don't think it qualifies
+                        // as it could also be that the array was declared earlier
+                        boolean validForEachLoop = true;
+                        while (true) { // dangerous while (true) loop; but do not despair, it isn't as dangerous as you may believe
+                            if (next == null) {
+                                System.err.println("Method " + node.name + "." + method.name + method.desc + " has a cursed for loop.");
+                                break;
+                            }
+                            if (next instanceof VarInsnNode && ((VarInsnNode)next).var == indexStore.var) {
+                                validForEachLoop = false;
+                                break;
+                            }
+                            if (next instanceof LabelNode && jumpToEnd.label.equals(next)) {
+                                break;
+                            }
+                            next = next.getNext();
+                        }
+                        if (validForEachLoop) {
+                            // So this is a valid foreach loop on an array!
+                            // Grats, but now we need to determine the correct type for LVT.
+                            // Since I did a mistake while designing this method, we already know
+                            // where the loop came from, so that thankfully is not an issue (yay)
+                            AbstractInsnNode previous = arrayStore.getPrevious();
+                            if (previous == null) {
+                                System.err.println("Method " + node.name + "." + method.name + method.desc + " has invalid bytecode.");
+                                continue;
+                            }
+                            String arrayDesc = null;
+                            if (previous instanceof MethodInsnNode) {
+                                MethodInsnNode methodInvocation = (MethodInsnNode) previous;
+                                arrayDesc = methodInvocation.desc.substring(methodInvocation.desc.lastIndexOf(')') + 1);
+                            } else if (previous instanceof FieldInsnNode) {
+                                arrayDesc = ((FieldInsnNode)previous).desc;
+                            } else if (previous instanceof TypeInsnNode) {
+                                if (previous.getOpcode() == Opcodes.ANEWARRAY) {
+                                    arrayDesc = "[L" + ((TypeInsnNode)previous).desc + ";";
+                                } else {
+                                    arrayDesc = ((TypeInsnNode)previous).desc;
+                                }
+                            } else if (previous instanceof VarInsnNode) {
+                                if (OPHelper.isVarLoad(previous.getOpcode())) {
+                                    VarInsnNode otherArrayInstance = (VarInsnNode) previous;
+                                    while (previous != null) {
+                                        if (previous instanceof VarInsnNode
+                                                && ((VarInsnNode) previous).var == otherArrayInstance.var
+                                                && OPHelper.isVarStore(previous.getOpcode())) {
+                                            AbstractInsnNode origin = previous.getPrevious();
+                                            if (origin instanceof VarInsnNode && OPHelper.isVarLoad(origin.getOpcode())) {
+                                                // Ugh...
+                                                otherArrayInstance = (VarInsnNode) origin;
+                                                continue;
+                                            } else if (origin instanceof MethodInsnNode) {
+                                                MethodInsnNode methodInvocation = (MethodInsnNode) origin;
+                                                arrayDesc = methodInvocation.desc.substring(methodInvocation.desc.lastIndexOf(')') + 1);
+                                                break;
+                                            } else if (origin instanceof FieldInsnNode) {
+                                                arrayDesc = ((FieldInsnNode)origin).desc;
+                                                break;
+                                            } else if (origin instanceof TypeInsnNode) {
+                                                if (origin.getOpcode() == Opcodes.ANEWARRAY) {
+                                                    arrayDesc = "[L" + ((TypeInsnNode)origin).desc + ";";
+                                                } else {
+                                                    arrayDesc = ((TypeInsnNode)origin).desc;
+                                                }
+                                                break;
+                                            } else {
+                                                // I have come to the conclusion that it isn't worth the effort to attempt to recover the
+                                                // type of the variable here
+                                                // This is as it is likely that the array is hidden deep in the stack before it was stored
+                                                break;
+                                            }
+                                        }
+                                        previous = previous.getPrevious();
+                                    }
+                                }
+                            }
+                            if (arrayDesc != null) {
+                                if (arrayDesc.charAt(0) != '[') {
+                                    System.err.println("Method " + node.name + "." + method.name + method.desc + " has invalid bytecode.");
+                                    System.err.println("Guessed type: " + arrayDesc + ", but expected an array. Array found at index " + arrayStore.var);
+                                    continue;
+                                }
+                                // Copy my Quiltflower rant from the other genericsfixing method
+                                // Actually - it might be for the better as otherwise I would have to spend my time checking if the LVT entry already exists
+                                LabelNode startObjectStoreLabel = new LabelNode();
+                                method.instructions.insertBefore(objectStore, startObjectStoreLabel);
+                                LocalVariableNode localVar = new LocalVariableNode("var" + objectStore.var,
+                                        arrayDesc.substring(1), null, startObjectStoreLabel, jumpToEnd.label, objectStore.var);
+                                method.localVariables.add(localVar);
+                                addedLVTs++;
+                            }
+                        }
+                        continue;
+                    }
+                    instruction = instruction.getNext();
+                }
+            }
+        }
+
+        if (doLog) {
+            System.out.printf("Resolved %d LVTs! (%d ms)\n", addedLVTs, System.currentTimeMillis() - startTime);
+        }
     }
 
     /**
