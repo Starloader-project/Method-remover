@@ -1,5 +1,6 @@
 package de.geolykt.starloader.obftools.asm;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -81,9 +82,23 @@ public class Oaktree {
     };
 
     public static void main(String[] args) {
+        long start = System.currentTimeMillis();
         if (args.length < 2) {
             System.err.println("Not enough arguments. The first argument is the source jar, the second one the target jar.");
             return;
+        }
+        if (args.length == 3 && Boolean.valueOf(args[2]) == true) {
+            // remapper activate!
+            File intermediaryMap = new File("intermediaryMap.temp");
+            File inputFile = new File(args[0]);
+            File outputFile = new File(args[1] + ".temp");
+            IntermediaryGenerator gen = new IntermediaryGenerator(inputFile, intermediaryMap, outputFile);
+            gen.remapClasses();
+            gen.doProposeFields();
+            gen.deobfuscate();
+            args[0] = args[1] + ".temp";
+            outputFile.deleteOnExit();
+            intermediaryMap.deleteOnExit();
         }
         try {
             Oaktree oakTree = new Oaktree();
@@ -103,7 +118,7 @@ public class Oaktree {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        System.out.println("Exiting!");
+        System.out.printf("Finished processing in record pace: Only %d ms!\n", System.currentTimeMillis() - start);
     }
 
     private final List<ClassNode> nodes = new ArrayList<>();
@@ -122,9 +137,6 @@ public class Oaktree {
      */
     public void fixForeachOnArray(boolean doLog) {
         int addedLVTs = 0;
-        if (doLog) {
-            System.out.println("Resolving loop on array LVTs...");
-        }
         long startTime = System.currentTimeMillis();
 
         for (ClassNode node : nodes) {
@@ -324,7 +336,7 @@ public class Oaktree {
         }
 
         if (doLog) {
-            System.out.printf("Resolved %d LVTs! (%d ms)\n", addedLVTs, System.currentTimeMillis() - startTime);
+            System.out.printf("Resolved %d foreach on array LVTs! (%d ms)\n", addedLVTs, System.currentTimeMillis() - startTime);
         }
     }
 
@@ -332,13 +344,13 @@ public class Oaktree {
      * Guesses the inner classes from class nodes
      */
     public void fixInnerClasses() {
+        long start = System.currentTimeMillis();
         Map<String, InnerClassNode> splitInner = new HashMap<>();
         Set<String> enums = new HashSet<>();
         Map<String, List<InnerClassNode>> parents = new HashMap<>();
         Map<String, ClassNode> classNodes = new HashMap<>();
 
         // Initial indexing sweep
-        System.out.println("Inner Classes Fixup: Initial Sweep");
         for (ClassNode node : nodes) {
             classNodes.put(node.name, node);
             parents.put(node.name, new ArrayList<>());
@@ -347,7 +359,6 @@ public class Oaktree {
             }
         }
         // Second sweep
-        System.out.println("Inner Classes Fixup: Second Sweep");
         for (ClassNode node : nodes) {
             // Sweep enum members
             if (enums.contains(node.superName)) {
@@ -392,7 +403,6 @@ public class Oaktree {
                 }
             }
         }
-        System.out.println("Inner Classes Fixup: Parent References");
         for (ClassNode node : nodes) {
             // General sweep
             Collection<InnerClassNode> innerNodesToAdd = new ArrayList<>();
@@ -410,7 +420,7 @@ public class Oaktree {
                 }
                 InnerClassNode innerNode = splitInner.get(descriptor);
                 if (innerNode != null) {
-                    if (innerNode.innerName == null/* && !field.name.contains("$")*/) {
+                    if (innerNode.innerName == null && !field.name.startsWith("this$")) {
                         // Not fatal, but worrying
                         System.err.println(String.format("Unlikely field descriptor for field \"%s\" with descriptor %s in class %s", field.name, field.desc, node.name));
                     }
@@ -426,7 +436,6 @@ public class Oaktree {
             }
         }
         // Add inner classes to the parent of the anonymous classes
-        System.out.println("Inner Classes Fixup: Parents");
         for (Entry<String, List<InnerClassNode>> entry : parents.entrySet()) {
             // Remove duplicates
             HashSet<String> entryNames = new HashSet<>();
@@ -451,10 +460,14 @@ public class Oaktree {
                 }
             }
         }
-        System.out.println("Inner Classes Fixup: Done!");
+        System.out.printf("Inner Classes Fixup: Done! (%d ms)\n", System.currentTimeMillis() - start);
     }
 
     /**
+     * Note: this method should NOT be invoked if parameter LVT was already culled.
+     * In our usecase LVT is added due to issues with our remapper, however that remapper
+     * does a poor job and only creates LVT entries for parameters, not for the variables.
+     *
      * Method that tries to put the Local Variable Table (LVT) in a acceptable state
      * by synchronising parameter declarations with lvt declarations. Does not do
      * anything to the LVT is the LVT is declared but empty, which is a sign of the
@@ -464,7 +477,6 @@ public class Oaktree {
      * into incoherent java code if the LVT is damaged.
      */
     public void fixParameterLVT() {
-        System.out.println("Resolving LVT conflicts...");
         long startTime = System.currentTimeMillis();
         for (ClassNode node : nodes) {
             for (MethodNode method : node.methods) {
@@ -526,9 +538,6 @@ public class Oaktree {
      * @param doLogging Whether to put anything to sysout for logging
      */
     public void fixSwitchMaps(boolean doLogging) {
-        if (doLogging) {
-            System.out.println("Starting to resolve switch-on-enum switchmap classes...");
-        }
         Map<FieldReference, String> deobfNames = new HashMap<>(); // The deobf name will be something like $SwitchMap$org$bukkit$Material
         long startTime = System.currentTimeMillis();
 
@@ -635,8 +644,6 @@ public class Oaktree {
     public void guessFieldGenerics() {
         Map<Map.Entry<String, Map.Entry<String, String>>, SignatureNode> newFieldSignatures = new HashMap<>();
         int addedFieldSignatures = 0;
-
-        System.out.println("Starting guessing field signatures...");
         long startTime = System.currentTimeMillis();
         // index signatureless fields
         for (ClassNode node : nodes) {
@@ -815,7 +822,6 @@ public class Oaktree {
     }
 
     public void index(JarFile file) {
-        System.out.println("Indexing class files...");
         file.entries().asIterator().forEachRemaining(entry -> {
             if (entry.getName().endsWith(".class")) {
                 ClassReader reader;
@@ -832,16 +838,7 @@ public class Oaktree {
                 nodes.add(node);
             }
         });
-        System.out.println("Indexed class files!");
-    }
-
-    public void printClassInfo() {
-        for (ClassNode node : nodes) {
-            System.out.println("Read class: " + node.name);
-            for (InnerClassNode clazzNode : node.innerClasses) {
-                System.out.println("Inner class: " + clazzNode.innerName + "; Outer class: " + clazzNode.outerName + "; Intern Name: " + clazzNode.name + "; Access: " + clazzNode.access);
-            }
-        }
+        System.out.println("Oaktree indexed class files!");
     }
 
     public void write(OutputStream out) throws IOException {

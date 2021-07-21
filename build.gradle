@@ -11,7 +11,7 @@ targetCompatibility = 11
 group = 'de.geolykt.starloader'
 archivesBaseName = 'obftools'
 // heya retard: to change the version you need to modify line 14 (the next line), line 46 and line 67.
-def baseVersion = '1.1.0'
+def baseVersion = '1.2.0'
 
 repositories {
     maven {
@@ -46,7 +46,7 @@ gradlePlugin {
     plugins {
         ObfToolsPlugin {
             id = project.archivesBaseName
-            version = '1.1.0'
+            version = '1.2.0'
             implementationClass = 'de.geolykt.starloader.obftools.ObfToolsPlugin'
         }
     }
@@ -67,7 +67,7 @@ publishing {
         plugin(MavenPublication) { publication ->
             groupId project.group
             artifactId project.archivesBaseName
-            version '1.1.0'
+            version '1.2.0'
 
             from components['java']
 
