@@ -105,13 +105,15 @@ public class Oaktree {
             JarFile file = new JarFile(args[0]);
             oakTree.index(file);
             file.close();
-//            oakTree.printClassInfo();
             oakTree.fixInnerClasses();
-            oakTree.fixParameterLVT();
+            try {
+                oakTree.fixParameterLVT();
+            } catch (NullPointerException e) {
+                System.err.println("Oaktree parameter LVT fix may not be needed and aborted prematurely.");
+            }
             oakTree.guessFieldGenerics();
             oakTree.fixSwitchMaps(true);
             oakTree.fixForeachOnArray(true);
-//            oakTree.printClassInfo();
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
             os.close();
