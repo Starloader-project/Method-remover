@@ -111,7 +111,7 @@ public class Oaktree {
             oakTree.guessFieldGenerics();
             oakTree.fixSwitchMaps(true);
             oakTree.fixForeachOnArray(true);
-            //oakTree.fixComparators(true);
+            oakTree.fixComparators(true, true);
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
             os.close();
@@ -121,9 +121,96 @@ public class Oaktree {
         System.out.printf("Finished processing in record pace: Only %d ms!\n", System.currentTimeMillis() - start);
     }
 
-    private final List<ClassNode> nodes = new ArrayList<>();
+    private final Map<String, ClassNode> nameToNode = new HashMap<>();
 
+    private final List<ClassNode> nodes = new ArrayList<>();
     public Oaktree() {
+    }
+
+    /**
+     * Add the signature of obvious bridge methods (i. e. comparators).
+     *
+     * @param doLogging Whether to perform any logging via System.out
+     * @param resolveTRArtifact Whether to resolve an artifact left over by tiny remapper.
+     */
+    public void fixComparators(boolean doLogging, boolean resolveTRArtifact) {
+        long start = System.currentTimeMillis();
+        int fixedBridges = 0;
+        for (ClassNode node : nodes) {
+            if (node.signature != null || node.interfaces.size() != 1) {
+                continue;
+            }
+            if (!node.interfaces.get(0).equals("java/util/Comparator")) {
+                continue;
+            }
+            // Ljava/lang/Object;Ljava/util/Comparator<Lorg/junit/runner/Description;>;
+            for (MethodNode method : node.methods) {
+                if ((method.access & Opcodes.ACC_SYNTHETIC) == 0) {
+                    continue;
+                }
+                if (method.name.equals("compare") && method.desc.equals("(Ljava/lang/Object;Ljava/lang/Object;)I")) {
+                    AbstractInsnNode insn = method.instructions.getFirst();
+                    while (insn instanceof LabelNode || insn instanceof LineNumberNode) {
+                        insn = insn.getNext();
+                    }
+                    if (insn.getOpcode() != Opcodes.ALOAD) {
+                        throw new IllegalStateException("invalid bridge method: unexpected opcode");
+                    }
+                    VarInsnNode aloadThis = (VarInsnNode) insn;
+                    if (aloadThis.var != 0) {
+                        throw new IllegalStateException("invalid bridge method: unexpected variable loaded");
+                    }
+                    insn = insn.getNext();
+                    if (insn.getOpcode() != Opcodes.ALOAD) {
+                        throw new IllegalStateException("invalid bridge method: unexpected opcode");
+                    }
+                    insn = insn.getNext();
+                    if (insn.getOpcode() != Opcodes.CHECKCAST) {
+                        throw new IllegalStateException("invalid bridge method: unexpected opcode");
+                    }
+                    insn = insn.getNext();
+                    if (insn.getOpcode() != Opcodes.ALOAD) {
+                        throw new IllegalStateException("invalid bridge method: unexpected opcode");
+                    }
+                    insn = insn.getNext();
+                    if (insn.getOpcode() != Opcodes.CHECKCAST) {
+                        throw new IllegalStateException("invalid bridge method: unexpected opcode");
+                    }
+                    insn = insn.getNext();
+                    if (insn.getOpcode() != Opcodes.INVOKEVIRTUAL) {
+                        throw new IllegalStateException("invalid bridge method: unexpected opcode");
+                    }
+                    MethodInsnNode invokevirtual = (MethodInsnNode) insn;
+                    insn = insn.getNext();
+                    if (insn.getOpcode() != Opcodes.IRETURN) {
+                        throw new IllegalStateException("invalid bridge method: unexpected opcode");
+                    }
+                    boolean methodCallIsInvalid = true;
+                    for (MethodNode m : node.methods) {
+                        if (m.name.equals(invokevirtual.name) && m.desc.equals(invokevirtual.desc)) {
+                            methodCallIsInvalid = false;
+                            break;
+                        }
+                    }
+                    if (methodCallIsInvalid) {
+                        if (resolveTRArtifact) {
+                            // Tiny remapper artifact
+                            invokevirtual.name = "compare";
+                        } else {
+                            throw new IllegalStateException("invalid bridge method: method does not exist (consider setting resolveTRArtifact to true)");
+                        }
+                    }
+                    String generics = invokevirtual.desc.substring(1, invokevirtual.desc.indexOf(';'));
+                    node.signature = "Ljava/lang/Object;Ljava/util/Comparator<" + generics + ";>;";
+                    fixedBridges++;
+                    method.access |= Opcodes.ACC_BRIDGE;
+                    break;
+                }
+            }
+        }
+        if (doLogging) {
+            System.out.printf("Fixed %d bridge methods! (%d ms)\n", fixedBridges, System.currentTimeMillis() - start);
+        }
     }
 
     /**
@@ -917,6 +1004,7 @@ public class Oaktree {
                 ClassNode node = new ClassNode();
                 reader.accept(node, 0);
                 nodes.add(node);
+                nameToNode.put(node.name, node);
             }
         });
         System.out.println("Oaktree indexed class files!");

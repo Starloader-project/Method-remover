@@ -74,6 +74,7 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.guessFieldGenerics();
                     deobfuscator.fixSwitchMaps(true);
                     deobfuscator.fixForeachOnArray(true);
+                    deobfuscator.fixComparators(true, true);
                     FileOutputStream fos = new FileOutputStream(intermediaryJar);
                     deobfuscator.write(fos);
                     fos.close();
