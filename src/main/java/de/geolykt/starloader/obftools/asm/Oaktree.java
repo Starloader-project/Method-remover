@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.jar.JarFile;
@@ -91,12 +92,12 @@ public class Oaktree {
             // remapper activate!
             File intermediaryMap = new File("intermediaryMap.temp");
             File inputFile = new File(args[0]);
-            File outputFile = new File(args[1] + ".temp");
+            File outputFile = new File(args[1] + ".temp.jar");
             IntermediaryGenerator gen = new IntermediaryGenerator(inputFile, intermediaryMap, outputFile);
             gen.remapClasses();
             gen.doProposeFields();
             gen.deobfuscate();
-            args[0] = args[1] + ".temp";
+            args[0] = args[1] + ".temp.jar";
             outputFile.deleteOnExit();
             intermediaryMap.deleteOnExit();
         }
@@ -106,14 +107,11 @@ public class Oaktree {
             oakTree.index(file);
             file.close();
             oakTree.fixInnerClasses();
-            try {
-                oakTree.fixParameterLVT();
-            } catch (NullPointerException e) {
-                System.err.println("Oaktree parameter LVT fix may not be needed and aborted prematurely.");
-            }
+            oakTree.fixParameterLVT();
             oakTree.guessFieldGenerics();
             oakTree.fixSwitchMaps(true);
             oakTree.fixForeachOnArray(true);
+            //oakTree.fixComparators(true);
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
             os.close();
@@ -466,10 +464,6 @@ public class Oaktree {
     }
 
     /**
-     * Note: this method should NOT be invoked if parameter LVT was already culled.
-     * In our usecase LVT is added due to issues with our remapper, however that remapper
-     * does a poor job and only creates LVT entries for parameters, not for the variables.
-     *
      * Method that tries to put the Local Variable Table (LVT) in a acceptable state
      * by synchronising parameter declarations with lvt declarations. Does not do
      * anything to the LVT is the LVT is declared but empty, which is a sign of the
@@ -484,21 +478,106 @@ public class Oaktree {
             for (MethodNode method : node.methods) {
                 List<LocalVariableNode> locals = method.localVariables;
                 List<ParameterNode> params = method.parameters;
-                if ((method.access & Opcodes.ACC_ABSTRACT) != 0 && locals == null) {
-                    // abstract methods do not have any local variables apparently.
-                    // It makes sense however given that abstract methods do not have a method body
-                    // where local variables could be declared
-                    continue;
-                }
                 if (method.desc.indexOf(')') == 1 && params == null) {
                     // since the description starts with a '(' we don't need to check that one
                     // a closing paranthesis after the opening one suggests that there are no input parameters.
                     continue;
                 }
-                if (!locals.isEmpty()) {
+                if ((method.access & Opcodes.ACC_ABSTRACT) != 0) {
+                    // abstract methods do not have any local variables apparently.
+                    // It makes sense however given that abstract methods do not have a method body
+                    // where local variables could be declared
+                    continue;
+                }
+                if (!Objects.requireNonNull(locals).isEmpty()) {
                     // LVTs that have been left alone by the obfuscator will have at least one declared local
                     continue;
                 }
+
+                if (params == null) {
+                    method.parameters = new ArrayList<>();
+                    params = method.parameters;
+                    // Generate method parameter array
+                    DescString description = new DescString(method.desc);
+                    List<String> types = new ArrayList<>();
+                    while (description.hasNext()) {
+                        types.add(description.nextType());
+                    }
+                    Set<String> existingTypes = new HashSet<>();
+                    Set<String> duplicateTypes = new HashSet<>();
+                    duplicateTypes.add("Ljava/lang/Class;"); // class is a keyword
+                    boolean oneArray = false;
+                    boolean multipleArrays = false;
+                    for (String type : types) {
+                        if (type.charAt(0) == '[') {
+                            if (oneArray) {
+                                multipleArrays = true;
+                            } else {
+                                oneArray = true;
+                            }
+                        } else {
+                            if (!existingTypes.add(type)) {
+                                duplicateTypes.add(type);
+                            }
+                        }
+                    }
+                    for (int i = 0; i < types.size(); i++) {
+                        String type = types.get(i);
+                        String name = null;
+                        switch (type.charAt(0)) {
+                        case 'L':
+                            int cutOffIndex = Math.max(type.lastIndexOf('/'), type.lastIndexOf('$')) + 1;
+                            name = Character.toString(Character.toLowerCase(type.codePointAt(cutOffIndex))) + type.substring(cutOffIndex + 1, type.length() - 1);
+                            if (duplicateTypes.contains(type)) {
+                                name += i;
+                            }
+                            break;
+                        case '[':
+                            if (multipleArrays) {
+                                name = "arr" + i;
+                            } else {
+                                name = "arr";
+                            }
+                            break;
+                        case 'F': // float
+                            name = "float" + i;
+                            break;
+                        case 'D': // double
+                            name = "double" + i;
+                            break;
+                        case 'Z': // boolean
+                            name = "boolean" + i;
+                            break;
+                        case 'B': // byte
+                            name = "byte" + i;
+                            break;
+                        case 'C': // char
+                            if (duplicateTypes.contains(type)) {
+                                name = "character" + i;
+                            } else {
+                                name = "character";
+                            }
+                            break;
+                        case 'S': // short
+                            name = "short" + i;
+                            break;
+                        case 'I': // integer
+                            if (duplicateTypes.contains(type)) {
+                                name = "integer" + i;
+                            } else {
+                                name = "integer";
+                            }
+                            break;
+                        case 'J': // long
+                            name = "long" + i;
+                            break;
+                        default:
+                            throw new IllegalStateException("Unknown type: " + type);
+                        }
+                        params.add(new ParameterNode(Objects.requireNonNull(name), 0));
+                    }
+                }
+
                 int localVariableIndex = 0;
                 if ((method.access & Opcodes.ACC_STATIC) == 0) {
                     localVariableIndex++;

@@ -35,8 +35,9 @@ import org.zeroturnaround.zip.ZipUtil;
 import org.zeroturnaround.zip.transform.ByteArrayZipEntryTransformer;
 import org.zeroturnaround.zip.transform.ZipEntryTransformer;
 
-import cuchaz.enigma.command.DeobfuscateCommand;
-import cuchaz.enigma.command.InvertMappingsCommand;
+import net.fabricmc.tinyremapper.OutputConsumerPath;
+import net.fabricmc.tinyremapper.TinyRemapper;
+import net.fabricmc.tinyremapper.TinyUtils;
 
 public class PostprocessTask extends Jar {
 
@@ -51,7 +52,7 @@ public class PostprocessTask extends Jar {
     @Override
     protected CopyAction createCopyAction() {
         File source = getArchiveFile().get().getAsFile();
-        File temp = new File(source.getParentFile(), source.getName() + ".temp");
+        File temp = new File(source.getParentFile(), source.getName() + ".temp.jar");
         File map = new File(source.getParentFile().getParentFile().getParentFile(), ObfToolsPlugin.INTERMEDIARY_MAP);
         return new TransformedCopyTask(extension.annotation, temp, source, source, map);
     }
@@ -105,10 +106,20 @@ public class PostprocessTask extends Jar {
             if (!invertedMap.exists()) {
                 invertMap(mapLocation, invertedMap, false);
             }
-            new DeobfuscateCommand().run(
-                    targetTemp.getAbsolutePath(), // input
-                    targetFinal.getAbsolutePath(), // output
-                    invertedMap.getAbsolutePath()); // map
+            TinyRemapper remapper = TinyRemapper.newRemapper()
+                    .withMappings(TinyUtils.createTinyMappingProvider(invertedMap.toPath(), "official", "intermediary"))
+                    .renameInvalidLocals(true)
+                    .threads(-1)
+                    .build();
+
+            try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(targetFinal.toPath()).build()) {
+                remapper.readInputs(targetTemp.toPath());
+                remapper.apply(outputConsumer);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } finally {
+                remapper.finish();
+            }
         } catch (Exception e) {
             e.printStackTrace();
             throw new RuntimeException(e);

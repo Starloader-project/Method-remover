@@ -8,8 +8,11 @@ import java.util.Enumeration;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
-import cuchaz.enigma.command.DeobfuscateCommand;
 import net.fabricmc.stitch.util.FieldNameFinder;
+import net.fabricmc.tinyremapper.NonClassCopyMode;
+import net.fabricmc.tinyremapper.OutputConsumerPath;
+import net.fabricmc.tinyremapper.TinyRemapper;
+import net.fabricmc.tinyremapper.TinyUtils;
 
 public class IntermediaryGenerator {
 
@@ -92,14 +95,20 @@ public class IntermediaryGenerator {
     }
 
     public void deobfuscate() {
-        try {
-            new DeobfuscateCommand().run(
-                    input.getAbsolutePath(), // input
-                    output.getAbsolutePath(), // output
-                    map.getAbsolutePath()); // map
-        } catch (Exception e) {
-            e.printStackTrace();
+        TinyRemapper remapper = TinyRemapper.newRemapper()
+                .withMappings(TinyUtils.createTinyMappingProvider(map.toPath(), "official", "intermediary"))
+                .renameInvalidLocals(true)
+                .threads(-1)
+                .build();
+
+        try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(output.toPath()).build()) {
+            outputConsumer.addNonClassFiles(input.toPath(), NonClassCopyMode.FIX_META_INF, remapper);
+            remapper.readInputs(input.toPath());
+            remapper.apply(outputConsumer);
+        } catch (IOException e) {
             throw new RuntimeException(e);
+        } finally {
+            remapper.finish();
         }
     }
 }

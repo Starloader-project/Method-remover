@@ -5,14 +5,18 @@ package de.geolykt.starloader.obftools.asm;
  */
 public class DescString {
 
-    private final String desc;
     private char[] asArray;
+    private final String desc;
     private int startIndex = 0;
 
     public DescString(String desc) {
         int begin = 1; // Always starts with a paranthesis
         int end = desc.indexOf(')');
         this.desc = desc.substring(begin, end);
+    }
+
+    public boolean hasNext() {
+        return desc.length() != startIndex;
     }
 
     public String nextType() {
