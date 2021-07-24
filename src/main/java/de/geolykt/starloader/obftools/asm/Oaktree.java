@@ -486,7 +486,6 @@ public class Oaktree {
                         outerMost = null;
                         innerMost = null;
                     }
-                    // TODO is there a possibility to "recover" the original access of the inner node?
                     InnerClassNode innerNode = new InnerClassNode(node.name, outerMost, innerMost, node.access);
                     parents.get(parent).add(innerNode);
                     splitInner.put(node.name, innerNode);
@@ -916,6 +915,27 @@ public class Oaktree {
             }
         }
 
+        // If another class has a field reference to the potential anonymous class, and that field is not
+        // synthetic, then the class is likely not anonymous.
+        // In the future I could settle with not checking for the anonymous access flag, but this would
+        // be quite the effort to get around nonetheless since previous steps of this method utilise
+        // this access flag
+        for (ClassNode node : nodes) {
+            for (FieldNode field : node.fields) {
+                if (field.desc.length() == 1 || (field.access & Opcodes.ACC_SYNTHETIC) != 0) {
+                    continue;
+                }
+                if (field.desc.codePointAt(field.desc.lastIndexOf('[') + 1) != 'L') {
+                    continue;
+                }
+                // Now technically, they are still inner classes. Just regular ones and they are not static ones
+                // however not adding them as a inner class has no effect in recomplieabillity so we will not really care about it just yet.
+                // TODO that being said, we should totally do it
+                String className = field.desc.substring(field.desc.lastIndexOf('[') + 2, field.desc.length() - 1);
+                candidates.remove(className);
+            }
+        }
+
         int addedInners = 0;
         for (Map.Entry<String, Map.Entry<String, MethodNode>> candidate : candidates.entrySet()) {
             String inner = candidate.getKey();
@@ -925,6 +945,7 @@ public class Oaktree {
             }
             ClassNode innerNode = nameToNode.get(inner);
             ClassNode outernode = nameToNode.get(outer.getKey());
+
             MethodNode outerMethod = outer.getValue();
             if (outernode == null) {
                 continue;
