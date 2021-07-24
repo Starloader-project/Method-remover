@@ -9,10 +9,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Set;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
@@ -82,6 +84,8 @@ public class Oaktree {
         }
     };
 
+    public static final int VISIBILITY_MODIFIERS = Opcodes.ACC_PRIVATE | Opcodes.ACC_PROTECTED | Opcodes.ACC_PUBLIC;
+
     public static void main(String[] args) {
         long start = System.currentTimeMillis();
         if (args.length < 2) {
@@ -112,6 +116,7 @@ public class Oaktree {
             oakTree.fixSwitchMaps(true);
             oakTree.fixForeachOnArray(true);
             oakTree.fixComparators(true, true);
+            oakTree.guessAnonymousInnerClasses(true);
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
             os.close();
@@ -435,11 +440,9 @@ public class Oaktree {
         Map<String, InnerClassNode> splitInner = new HashMap<>();
         Set<String> enums = new HashSet<>();
         Map<String, List<InnerClassNode>> parents = new HashMap<>();
-        Map<String, ClassNode> classNodes = new HashMap<>();
 
         // Initial indexing sweep
         for (ClassNode node : nodes) {
-            classNodes.put(node.name, node);
             parents.put(node.name, new ArrayList<>());
             if (node.superName.equals("java/lang/Enum")) {
                 enums.add(node.name); // Register enum
@@ -533,7 +536,7 @@ public class Oaktree {
                 }
             }
             toRemove.forEach(entry.getValue()::remove);
-            ClassNode node = classNodes.get(entry.getKey());
+            ClassNode node = nameToNode.get(entry.getKey());
             for (InnerClassNode innerEntry : entry.getValue()) {
                 boolean skip = false;
                 for (InnerClassNode inner : node.innerClasses) {
@@ -798,6 +801,165 @@ public class Oaktree {
 
         if (doLogging) {
             System.out.printf("Recovered %d switch-on-enum switchmap classes! (%d ms)\n", deobfNames.size(), System.currentTimeMillis() - startTime);
+        }
+    }
+
+    /**
+     * Guesses anonymous inner classes by checking whether they have a synthetic field and if they
+     * do whether they are referenced only by a single "parent" class.
+     * Note: this method is VERY aggressive when it comes to adding inner classes, sometimes it adds
+     * inner classes on stuff where it wouldn't belong. This  means that useage of this method should
+     * be done wiseley. This method will do some damage even if it does no good.
+     *
+     * @param doLog whether to perfom any logging via System.out
+     */
+    public void guessAnonymousInnerClasses(boolean doLog) {
+        long start = System.currentTimeMillis();
+
+        // Class name -> referenced class, method
+        // I am well aware that we are using method node, but given that there can be multiple methods with the same
+        // name it is better to use MethodNode instead of String to reduce object allocation overhead.
+        // Should we use triple instead? Perhaps.
+        HashMap<String, Map.Entry<String, MethodNode>> candidates = new LinkedHashMap<>();
+        for (ClassNode node : nodes) {
+            if ((node.access & VISIBILITY_MODIFIERS) != 0) {
+                continue; // Anonymous inner classes are always package-private
+            }
+            boolean skipClass = false;
+            FieldNode outerClassReference = null;
+            for (FieldNode field : node.fields) {
+                final int requiredFlags = Opcodes.ACC_SYNTHETIC | Opcodes.ACC_FINAL;
+                if ((field.access & requiredFlags) == requiredFlags
+                        && (field.access & VISIBILITY_MODIFIERS) == 0) {
+                    if (outerClassReference != null) {
+                        skipClass = true;
+                        break; // short-circuit
+                    }
+                    outerClassReference = field;
+                }
+            }
+            if (skipClass || outerClassReference == null) {
+                continue;
+            }
+            // anonymous classes can only have a single constructor since they are only created at a single spot
+            // However they also have to have a constructor so they can pass the outer class reference
+            MethodNode constructor = null;
+            for (MethodNode method : node.methods) {
+                if (method.name.equals("<init>")) {
+                    if (constructor != null) {
+                        // cant have multiple constructors
+                        skipClass = true;
+                        break; // short-circuit
+                    }
+                    if ((method.access & VISIBILITY_MODIFIERS) != 0) {
+                        // The constructor should be package - protected
+                        skipClass = true;
+                        break;
+                    }
+                    constructor = method;
+                }
+            }
+            if (skipClass || constructor == null) { // require a single constructor, not more, not less
+                continue;
+            }
+            // since we have the potential reference to the outer class and we know that it has to be set
+            // via the constructor's parameter, we can check whether this is the case here
+            DescString desc = new DescString(constructor.desc);
+            skipClass = true;
+            while (desc.hasNext()) {
+                String type = desc.nextType();
+                if (type.equals(outerClassReference.desc)) {
+                    skipClass = false;
+                    break;
+                }
+            }
+            if (skipClass) {
+                continue;
+            }
+            if (node.name.indexOf('$') != -1 && !Character.isDigit(node.name.charAt(node.name.length() - 1))) {
+                // Unobfuscated class that is 100% not anonymous
+                continue;
+            }
+            candidates.put(node.name, null);
+        }
+
+        // Make sure that the constructor is only invoked in a single class, which should be the outer class
+        for (ClassNode node : nodes) {
+            for (MethodNode method : node.methods) {
+                AbstractInsnNode instruction = method.instructions.getFirst();
+                while (instruction != null) {
+                    if (instruction instanceof MethodInsnNode && ((MethodInsnNode)instruction).name.equals("<init>")) {
+                        MethodInsnNode methodInvocation = (MethodInsnNode) instruction;
+                        String owner = methodInvocation.owner;
+                        if (candidates.containsKey(owner)) {
+                            if (owner.equals(node.name)) {
+                                // this is no really valid anonymous class
+                                candidates.remove(owner);
+                            } else {
+                                Map.Entry<String, MethodNode> invoker = candidates.get(owner);
+                                if (invoker == null) {
+                                    candidates.put(owner, Map.entry(node.name, method));
+                                } else if (!invoker.getKey().equals(node.name)
+                                        || !invoker.getValue().name.equals(method.name)
+                                        || !invoker.getValue().desc.equals(method.desc)) {
+                                    // constructor referenced by multiple classes, cannot be valid
+                                    // However apparently these classes could be extended? I am not entirely sure how that is possible, but it is.
+                                    // That being said, we are going to ignore that this is possible and just consider them invalid
+                                    // as everytime this happens the decompiler is able to decompile the class without any issues.
+                                    candidates.remove(owner);
+                                }
+                            }
+                        }
+                    }
+                    instruction = instruction.getNext();
+                }
+            }
+        }
+
+        int addedInners = 0;
+        for (Map.Entry<String, Map.Entry<String, MethodNode>> candidate : candidates.entrySet()) {
+            String inner = candidate.getKey();
+            Map.Entry<String, MethodNode> outer = candidate.getValue();
+            if (outer == null) {
+                continue;
+            }
+            ClassNode innerNode = nameToNode.get(inner);
+            ClassNode outernode = nameToNode.get(outer.getKey());
+            MethodNode outerMethod = outer.getValue();
+            if (outernode == null) {
+                continue;
+            }
+            boolean hasInnerClassInfoInner = false;
+            for (InnerClassNode icn : innerNode.innerClasses) {
+                if (icn.name.equals(inner)) {
+                    hasInnerClassInfoInner = true;
+                    break;
+                }
+            }
+            boolean hasInnerClassInfoOuter = false;
+            for (InnerClassNode icn : outernode.innerClasses) {
+                if (icn.name.equals(inner)) {
+                    hasInnerClassInfoOuter = true;
+                    break;
+                }
+            }
+            if (hasInnerClassInfoInner && hasInnerClassInfoOuter) {
+                continue;
+            }
+            InnerClassNode newInnerClassNode = new InnerClassNode(inner, null, null, 16400);
+            if (!hasInnerClassInfoInner) {
+                innerNode.outerMethod = outerMethod.name;
+                innerNode.outerMethodDesc = outerMethod.desc;
+                innerNode.innerClasses.add(newInnerClassNode);
+            }
+            if (!hasInnerClassInfoOuter) {
+                outernode.innerClasses.add(newInnerClassNode);
+            }
+            addedInners++;
+        }
+
+        if (doLog) {
+            System.out.printf(Locale.ROOT, "Added %d inner class nodes for anonymous classes. (%d ms)\n", addedInners, System.currentTimeMillis() - start);
         }
     }
 
