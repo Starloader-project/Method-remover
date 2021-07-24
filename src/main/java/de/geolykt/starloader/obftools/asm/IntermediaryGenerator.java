@@ -39,7 +39,8 @@ public class IntermediaryGenerator {
                     continue;
                 }
                 char[] nameChars = entry.getName().toCharArray();
-                if (nameChars.length < 9 || nameChars[nameChars.length - 8] != '/') {
+                boolean illegalClassName = entry.getName().endsWith("do.class") || entry.getName().endsWith("if.class");
+                if (!illegalClassName && (nameChars.length < 9 || nameChars[nameChars.length - 8] != '/')) {
                     continue;
                 }
                 char[] jvmName = new char[nameChars.length - 6];
@@ -50,9 +51,12 @@ public class IntermediaryGenerator {
                 buffWriter.write(jvmName);
                 buffWriter.write('\t');
                 char[] newName = new char[jvmName.length + 6];
-                System.arraycopy(jvmName, 0, newName, 0, jvmName.length - 1); // head
-                newName[newName.length - 1] = jvmName[jvmName.length - 1]; // tail
-                System.arraycopy("class_".toCharArray(), 0, newName, newName.length - 7, 6); // class_
+                System.arraycopy(jvmName, 0, newName, 0, jvmName.length - (illegalClassName ? 2 : 1)); // package
+                newName[newName.length - 1] = jvmName[jvmName.length - 1]; // actual name
+                if (illegalClassName) {
+                    newName[newName.length - 2] = jvmName[jvmName.length - 2];
+                }
+                System.arraycopy("class_".toCharArray(), 0, newName, newName.length - (6 + (illegalClassName ? 2 : 1)), 6); // class_
                 buffWriter.write(newName);
                 buffWriter.write('\n'); // The tiny format does not make use of system-dependent newlines
             }
