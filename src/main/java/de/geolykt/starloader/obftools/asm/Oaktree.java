@@ -478,17 +478,33 @@ public class Oaktree {
                 }
                 if (!skip) {
                     int lastSeperator = node.name.lastIndexOf('$');
-                    String outerMost = node.name.substring(0, lastSeperator++);
-                    String parent = outerMost;
+                    String outerNode = node.name.substring(0, lastSeperator++);
                     String innerMost = node.name.substring(lastSeperator);
+                    InnerClassNode innerClassNode;
                     if (innerMost.matches("^[0-9]+$")) {
                         // Anonymous class
-                        outerMost = null;
-                        innerMost = null;
+                        innerClassNode = new InnerClassNode(node.name, null, null, node.access);
+                    } else {
+                        // We need to check for static inner classes.
+                        // We already know that anonymous classes can never be static classes by definition,
+                        // So we can skip that step for anonymous classes
+                        // A static inner class is static if it has no synthetic fields.
+                        // This is a very crude definition of it, but at least it works
+                        boolean hasSyntheticField = false;
+                        for (FieldNode field : node.fields) {
+                            if ((field.access & Opcodes.ACC_SYNTHETIC) != 0) {
+                                hasSyntheticField = true;
+                                break;
+                            }
+                        }
+                        if (!hasSyntheticField) {
+                            node.access |= Opcodes.ACC_STATIC;
+                        }
+                        node.outerClass = outerNode;
+                        innerClassNode = new InnerClassNode(node.name, outerNode, innerMost, node.access);
                     }
-                    InnerClassNode innerNode = new InnerClassNode(node.name, outerMost, innerMost, node.access);
-                    parents.get(parent).add(innerNode);
-                    splitInner.put(node.name, innerNode);
+                    parents.get(outerNode).add(innerClassNode);
+                    splitInner.put(node.name, innerClassNode);
                 }
             }
         }
