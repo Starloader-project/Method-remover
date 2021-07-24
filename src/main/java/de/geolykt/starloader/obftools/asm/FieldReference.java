@@ -45,6 +45,12 @@ public class FieldReference {
         return name;
     }
 
+    /**
+     * Obtains the simple internal name of the owner.
+     * This means it will be like this: "org/example/ClassName"
+     *
+     * @return The simple internal name of the owner
+     */
     public String getOwner() {
         return owner;
     }

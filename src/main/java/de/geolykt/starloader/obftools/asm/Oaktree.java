@@ -465,6 +465,7 @@ public class Oaktree {
                     // We are using 16400 for access, but are there times where this is not wanted?
                     InnerClassNode innerNode = new InnerClassNode(node.name, null, null, 16400);
                     parents.get(node.superName).add(innerNode);
+                    node.outerClass = node.superName;
                     node.innerClasses.add(innerNode);
                 }
             } else if (node.name.contains("$")) {
@@ -500,9 +501,9 @@ public class Oaktree {
                         if (!hasSyntheticField) {
                             node.access |= Opcodes.ACC_STATIC;
                         }
-                        node.outerClass = outerNode;
                         innerClassNode = new InnerClassNode(node.name, outerNode, innerMost, node.access);
                     }
+                    node.outerClass = outerNode;
                     parents.get(outerNode).add(innerClassNode);
                     splitInner.put(node.name, innerClassNode);
                 }
@@ -805,7 +806,27 @@ public class Oaktree {
                         if (newName != null) {
                             fieldInstruction.name = newName;
                             if (!addedInnerClassNodes.contains(fRef.getOwner())) {
-                                node.innerClasses.add(new InnerClassNode(fRef.getOwner(), node.name, null, Opcodes.ACC_STATIC ^ Opcodes.ACC_SYNTHETIC ^ Opcodes.ACC_FINAL));
+                                InnerClassNode innerClassNode = new InnerClassNode(fRef.getOwner(), node.name, null, Opcodes.ACC_STATIC ^ Opcodes.ACC_SYNTHETIC ^ Opcodes.ACC_FINAL);
+                                ClassNode outerNode = nameToNode.get(fRef.getOwner());
+                                if (outerNode != null) {
+                                    outerNode.innerClasses.add(innerClassNode);
+                                }
+                                ClassNode outermostClassnode = null;
+                                if (node.outerClass != null) {
+                                    outermostClassnode = nameToNode.get(node.outerClass);
+                                }
+                                if (outermostClassnode == null) {
+                                    for (InnerClassNode inner : node.innerClasses) {
+                                        if (inner.name.equals(node.name) && inner.outerName != null) {
+                                            outermostClassnode = nameToNode.get(inner.outerName);
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (outermostClassnode != null) {
+                                    outermostClassnode.innerClasses.add(innerClassNode);
+                                }
+                                node.innerClasses.add(innerClassNode);
                             }
                         }
                     }
@@ -987,6 +1008,7 @@ public class Oaktree {
             if (!hasInnerClassInfoInner) {
                 innerNode.outerMethod = outerMethod.name;
                 innerNode.outerMethodDesc = outerMethod.desc;
+                innerNode.outerClass = outernode.name;
                 innerNode.innerClasses.add(newInnerClassNode);
             }
             if (!hasInnerClassInfoOuter) {
