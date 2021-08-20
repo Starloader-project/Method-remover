@@ -11,22 +11,24 @@ import org.objectweb.asm.tree.FieldNode;
  * This class is similar to {@link FieldNode} / {@link FieldInsnNode} though with a few
  * "useless" features removed so it can be used for one thing only.
  */
-public class FieldReference {
+public final class FieldReference {
 
     private final String desc;
     private final String name;
     private final String owner;
 
     public FieldReference(FieldInsnNode instruction) {
-        this.owner = instruction.owner;
-        this.name = instruction.name;
-        this.desc = instruction.desc;
+        this(instruction.owner, instruction.desc, instruction.name);
     }
 
     public FieldReference(String owner, FieldNode node) {
+        this(owner, node.desc, node.name);
+    }
+
+    public FieldReference(String owner, String desc, String name) {
         this.owner = owner;
-        this.name = node.name;
-        this.desc = node.desc;
+        this.name = name;
+        this.desc = desc;
     }
 
     @Override
@@ -55,8 +57,18 @@ public class FieldReference {
         return owner;
     }
 
+    /**
+     * Obtains the field descriptor of the referred field
+     *
+     * @return The field descriptor
+     */
+    public String getDesc() {
+        return desc;
+    }
+
     @Override
     public int hashCode() {
+//        return (owner.hashCode() & 0xFFFF0000 | name.hashCode() & 0x0000FFFF) ^ desc.hashCode();
         return Objects.hash(owner, name, desc);
     }
 

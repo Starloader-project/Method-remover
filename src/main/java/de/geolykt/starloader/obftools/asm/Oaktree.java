@@ -48,6 +48,7 @@ import org.objectweb.asm.tree.VarInsnNode;
  * @author Geolykt
  */
 public class Oaktree {
+    // TODO: lambda handle name recovery
 
     /**
      * A hardcoded set of implementations of the Iterable interface that apply for
@@ -94,16 +95,14 @@ public class Oaktree {
         }
         if (args.length == 3 && Boolean.valueOf(args[2]) == true) {
             // remapper activate!
-            File intermediaryMap = new File("intermediaryMap.temp");
             File inputFile = new File(args[0]);
             File outputFile = new File(args[1] + ".temp.jar");
-            IntermediaryGenerator gen = new IntermediaryGenerator(inputFile, intermediaryMap, outputFile);
+            IntermediaryGenerator gen = new IntermediaryGenerator(inputFile, outputFile);
             gen.remapClasses();
             gen.doProposeFields();
             gen.deobfuscate();
             args[0] = args[1] + ".temp.jar";
             outputFile.deleteOnExit();
-            intermediaryMap.deleteOnExit();
         }
         try {
             Oaktree oakTree = new Oaktree();
@@ -1225,6 +1224,12 @@ public class Oaktree {
                 ClassNode node = new ClassNode();
                 reader.accept(node, 0);
                 nodes.add(node);
+//                if (node.name.endsWith("or/class_u")) {
+//                    org.objectweb.asm.util.ASMifier asmifier = new org.objectweb.asm.util.ASMifier();
+//                    org.objectweb.asm.util.TraceClassVisitor tcv =
+//                            new org.objectweb.asm.util.TraceClassVisitor(null, asmifier, new java.io.PrintWriter(System.out));
+//                    node.accept(tcv);
+//                }
                 nameToNode.put(node.name, node);
             }
         });
