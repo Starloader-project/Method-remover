@@ -79,6 +79,7 @@ public class IntermediaryGenerator {
                 @SuppressWarnings("resource")
                 BufferedWriter dontcomplain = new BufferedWriter(new FileWriter(map, StandardCharsets.UTF_8, false));
                 bw = dontcomplain;
+                bw.write("v1\tofficial\tintermediary\n");
             } catch (IOException e) {
                 e.printStackTrace();
             }

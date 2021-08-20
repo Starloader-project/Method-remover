@@ -3,7 +3,6 @@ package de.geolykt.starloader.obftools;
 import java.util.HashSet;
 import java.util.Map;
 
-import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.tree.AnnotationNode;
@@ -15,13 +14,10 @@ public class ClassremoverVisitor extends ClassVisitor {
     protected final String annotation;
     protected final HashSet<Map.Entry<String, String>> methodBlackList = new HashSet<>();
 
-    public ClassremoverVisitor(int api, ClassVisitor classVisitor, String annotation, byte[] original) {
+    public ClassremoverVisitor(int api, ClassVisitor classVisitor, String annotation, ClassNode original) {
         super(api, classVisitor);
         this.annotation = annotation;
-        final ClassReader reader = new ClassReader(original);
-        final ClassNode code = new ClassNode(api);
-        reader.accept(code, 0);
-        for (MethodNode method : code.methods) {
+        for (MethodNode method : original.methods) {
             boolean skip = false;
             if (method.invisibleAnnotations != null) {
                 for (AnnotationNode annotationNode : method.invisibleAnnotations) {
