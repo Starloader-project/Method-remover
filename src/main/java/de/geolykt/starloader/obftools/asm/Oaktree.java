@@ -484,25 +484,45 @@ public class Oaktree {
                     if (innerMost.matches("^[0-9]+$")) {
                         // Anonymous class
                         innerClassNode = new InnerClassNode(node.name, null, null, node.access);
+                        node.outerClass = outerNode;
                     } else {
                         // We need to check for static inner classes.
                         // We already know that anonymous classes can never be static classes by definition,
                         // So we can skip that step for anonymous classes
-                        // A static inner class is static if it has no synthetic fields.
+                        // A static inner class is static if it has no non-static fields or methods.
                         // This is a very crude definition of it, but at least it works
-                        boolean hasSyntheticField = false;
+                        boolean staticInnerClass = true;
                         for (FieldNode field : node.fields) {
-                            if ((field.access & Opcodes.ACC_SYNTHETIC) != 0) {
-                                hasSyntheticField = true;
+                            if ((field.access & Opcodes.ACC_STATIC) == 0) {
+                                staticInnerClass = false;
                                 break;
                             }
                         }
-                        if (!hasSyntheticField) {
-                            node.access |= Opcodes.ACC_STATIC;
+                        if (staticInnerClass) {
+                            for (MethodNode method : node.methods) {
+                                if ((method.access & Opcodes.ACC_STATIC) == 0) {
+                                    staticInnerClass = false;
+                                    break;
+                                }
+                            }
+                        }
+                        // Interfaces, Enums and Records are implicitly static
+                        if (!staticInnerClass) {
+                            staticInnerClass = (node.access & Opcodes.ACC_INTERFACE) != 0
+                                    || (node.access & Opcodes.ACC_RECORD) != 0
+                                    || ((node.access & Opcodes.ACC_ENUM) != 0 && node.superName.equals("java/lang/Enum"));
+                        }
+                        // Member classes of interfaces are implicitly static
+                        if (!staticInnerClass) {
+                            ClassNode outerClassNode = nameToNode.get(outerNode);
+                            staticInnerClass = outerClassNode != null && (outerClassNode.access & Opcodes.ACC_INTERFACE) != 0;
+                        }
+                        if (!staticInnerClass) {
+                            // Beware of https://docs.oracle.com/javase/specs/jls/se16/html/jls-8.html#jls-8.1.3
+                            node.outerClass = outerNode;
                         }
                         innerClassNode = new InnerClassNode(node.name, outerNode, innerMost, node.access);
                     }
-                    node.outerClass = outerNode;
                     parents.get(outerNode).add(innerClassNode);
                     splitInner.put(node.name, innerClassNode);
                 }

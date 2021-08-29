@@ -31,6 +31,7 @@ dependencies {
     implementation "org.ow2.asm:asm:9.1"
     implementation "org.ow2.asm:asm-tree:9.1"
     implementation "org.ow2.asm:asm-commons:9.1"
+    implementation "org.quiltmc:tiny-mappings-parser:0.3.0" // mappings lib
     implementation "de.geolykt.starloader:stitch:0.6.1" // Mappings generation
     implementation "de.geolykt.starloader:access-widener:2.0.0" // Access widening technologies
 
@@ -42,7 +43,7 @@ gradlePlugin {
     plugins {
         ObfToolsPlugin {
             id = project.archivesBaseName
-            version = '1.2.0'
+            version = '1.2.0-intern'
             implementationClass = 'de.geolykt.starloader.obftools.ObfToolsPlugin'
         }
     }
@@ -63,7 +64,7 @@ publishing {
         plugin(MavenPublication) { publication ->
             groupId project.group
             artifactId project.archivesBaseName
-            version '1.2.0'
+            version '1.2.0-intern'
 
             from components['java']
 
