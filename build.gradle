@@ -43,7 +43,7 @@ gradlePlugin {
     plugins {
         ObfToolsPlugin {
             id = project.archivesBaseName
-            version = '1.2.0-intern'
+            version = baseVersion
             implementationClass = 'de.geolykt.starloader.obftools.ObfToolsPlugin'
         }
     }
@@ -64,7 +64,7 @@ publishing {
         plugin(MavenPublication) { publication ->
             groupId project.group
             artifactId project.archivesBaseName
-            version '1.2.0-intern'
+            version baseVersion
 
             from components['java']
 

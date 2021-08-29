@@ -46,20 +46,20 @@ public final class RemapperUtils {
                 String type = colums[0];
                 if (type.equals("CLASS")) {
                     // Format: CLASS originalName newName
-                    if (colums.length == 3) {
+                    if (colums.length != 3) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 3.");
                     }
                     remapper.remapClassName(colums[1], colums[2]);
                 } else if (type.equals("METHOD")) {
                     // Format: METHOD owner descriptor originalName newName
-                    if (colums.length == 5) {
+                    if (colums.length != 5) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 5.");
                     }
                     // TODO add
                     throw new UnsupportedOperationException("Method remapping is not yet supported.");
                 } else if (type.equals("FIELD")) {
                     // Format: FIELD owner descriptor originalName newName
-                    if (colums.length == 5) {
+                    if (colums.length != 5) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 5.");
                     }
                     remapper.remapField(colums[1], colums[2], colums[3], colums[4]);
@@ -101,20 +101,20 @@ public final class RemapperUtils {
                 String type = colums[0];
                 if (type.equals("CLASS")) {
                     // Format: CLASS originalName newName
-                    if (colums.length == 3) {
+                    if (colums.length != 3) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 3.");
                     }
                     remapper.remapClassName(colums[2], colums[1]);
                 } else if (type.equals("METHOD")) {
                     // Format: METHOD owner descriptor originalName newName
-                    if (colums.length == 5) {
+                    if (colums.length != 5) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 5.");
                     }
                     // TODO add
                     throw new UnsupportedOperationException("Method remapping is not yet supported.");
                 } else if (type.equals("FIELD")) {
                     // Format: FIELD owner descriptor originalName newName
-                    if (colums.length == 5) {
+                    if (colums.length != 5) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 5.");
                     }
                     remapper.remapField(colums[1], colums[2], colums[4], colums[3]);

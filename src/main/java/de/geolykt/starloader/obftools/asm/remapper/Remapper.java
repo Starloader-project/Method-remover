@@ -363,22 +363,24 @@ public final class Remapper {
                     if (remapSignature(specialisedInsn.desc, sharedStringBuilder)) {
                         specialisedInsn.desc = sharedStringBuilder.toString();
                     }
-                    Handle handle = (Handle) specialisedInsn.bsmArgs[1];
-                    String hOwner = handle.getOwner();
-                    String newOwner = oldToNewClassName.get(hOwner);
-                    boolean modified = false;
-                    if (newOwner != null) {
-                        hOwner = newOwner;
-                        modified = true;
-                    }
-                    String desc = handle.getDesc();
-                    sharedStringBuilder.setLength(0);
-                    if (remapSignature(desc, sharedStringBuilder)) {
-                        desc = sharedStringBuilder.toString();
-                        modified = true;
-                    }
-                    if (modified) {
-                        specialisedInsn.bsmArgs[1] = new Handle(handle.getTag(), hOwner, handle.getName(), desc, handle.isInterface());
+                    if (specialisedInsn.bsmArgs.length != 1) {
+                        Handle handle = (Handle) specialisedInsn.bsmArgs[1];
+                        String hOwner = handle.getOwner();
+                        String newOwner = oldToNewClassName.get(hOwner);
+                        boolean modified = false;
+                        if (newOwner != null) {
+                            hOwner = newOwner;
+                            modified = true;
+                        }
+                        String desc = handle.getDesc();
+                        sharedStringBuilder.setLength(0);
+                        if (remapSignature(desc, sharedStringBuilder)) {
+                            desc = sharedStringBuilder.toString();
+                            modified = true;
+                        }
+                        if (modified) {
+                            specialisedInsn.bsmArgs[1] = new Handle(handle.getTag(), hOwner, handle.getName(), desc, handle.isInterface());
+                        }
                     }
                 } else if (insn instanceof LdcInsnNode) {
                     LdcInsnNode specialisedInsn = (LdcInsnNode) insn;
