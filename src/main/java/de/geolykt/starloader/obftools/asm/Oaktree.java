@@ -489,35 +489,56 @@ public class Oaktree {
                         // We need to check for static inner classes.
                         // We already know that anonymous classes can never be static classes by definition,
                         // So we can skip that step for anonymous classes
-                        // A static inner class is static if it has no non-static fields or methods.
-                        // This is a very crude definition of it, but at least it works
-                        boolean staticInnerClass = true;
-                        for (FieldNode field : node.fields) {
-                            if ((field.access & Opcodes.ACC_STATIC) == 0) {
-                                staticInnerClass = false;
-                                break;
-                            }
-                        }
-                        if (staticInnerClass) {
-                            for (MethodNode method : node.methods) {
-                                if ((method.access & Opcodes.ACC_STATIC) == 0) {
-                                    staticInnerClass = false;
-                                    break;
-                                }
-                            }
-                        }
+                        boolean staticInnerClass = false;
+                        boolean implicitStatic = false;
                         // Interfaces, Enums and Records are implicitly static
                         if (!staticInnerClass) {
                             staticInnerClass = (node.access & Opcodes.ACC_INTERFACE) != 0
                                     || (node.access & Opcodes.ACC_RECORD) != 0
                                     || ((node.access & Opcodes.ACC_ENUM) != 0 && node.superName.equals("java/lang/Enum"));
+                            implicitStatic = staticInnerClass;
                         }
                         // Member classes of interfaces are implicitly static
                         if (!staticInnerClass) {
                             ClassNode outerClassNode = nameToNode.get(outerNode);
                             staticInnerClass = outerClassNode != null && (outerClassNode.access & Opcodes.ACC_INTERFACE) != 0;
+                            implicitStatic = staticInnerClass;
                         }
-                        if (!staticInnerClass) {
+                        // the constructor(s) of the explicit static inner class never contain a reference to the outer class
+                        if (!staticInnerClass && outerNode != null) {
+                            boolean staticConstructor = false;
+                            for (MethodNode method : node.methods) {
+                                if (method.name.equals("<init>")) {
+                                    int outernodeLen = outerNode.length();
+                                    if (outernodeLen + 2 > method.desc.length()) {
+                                        staticConstructor = true;
+                                        break;
+                                    }
+                                    String arg = method.desc.substring(2, outernodeLen + 2);
+                                    if (!arg.equals(outerNode) || method.desc.codePointAt(outernodeLen + 2) != ';') {
+                                        staticConstructor = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (staticConstructor) {
+                                staticInnerClass = true;
+                                implicitStatic = false;
+                            }
+                        }
+                        if (staticInnerClass && !implicitStatic) {
+                            for (FieldNode field : node.fields) {
+                                if ((field.access & Opcodes.ACC_FINAL) != 0 && field.name.startsWith("this$")) {
+                                    System.err.println("Falsely identified " + node.name + " as static inner class.");
+                                    staticInnerClass = false;
+                                }
+                            }
+                        }
+                        if (staticInnerClass) {
+                            if (!implicitStatic) {
+                                node.access |= Opcodes.ACC_STATIC; // not sure if that is valid but eh
+                            }
+                        } else {
                             // Beware of https://docs.oracle.com/javase/specs/jls/se16/html/jls-8.html#jls-8.1.3
                             node.outerClass = outerNode;
                         }
