@@ -97,9 +97,9 @@ public class Oaktree {
             // remapper activate!
             File inputFile = new File(args[0]);
             File outputFile = new File(args[1] + ".temp.jar");
-            IntermediaryGenerator gen = new IntermediaryGenerator(inputFile, outputFile);
+            IntermediaryGenerator gen = new IntermediaryGenerator(inputFile, null, outputFile);
             gen.remapClasses();
-            gen.doProposeFields();
+            gen.doProposeEnumFieldsV2();
             gen.deobfuscate();
             args[0] = args[1] + ".temp.jar";
             outputFile.deleteOnExit();

@@ -62,7 +62,7 @@ public class ObfToolsPlugin implements Plugin<Project> {
                 File intermediaryJar = gradleProject.file(INTERMEDIARY_JAR);
                 IntermediaryGenerator generator = new IntermediaryGenerator(f, map, intermediaryJar);
                 generator.remapClasses();
-                generator.doProposeFields();
+                generator.doProposeEnumFieldsV2();
                 generator.deobfuscate();
                 Oaktree deobfuscator = new Oaktree();
                 try {
