@@ -93,17 +93,6 @@ public class Oaktree {
             System.err.println("Not enough arguments. The first argument is the source jar, the second one the target jar.");
             return;
         }
-        if (args.length == 3 && Boolean.valueOf(args[2]) == true) {
-            // remapper activate!
-            File inputFile = new File(args[0]);
-            File outputFile = new File(args[1] + ".temp.jar");
-            IntermediaryGenerator gen = new IntermediaryGenerator(inputFile, null, outputFile);
-            gen.remapClasses();
-            gen.doProposeEnumFieldsV2();
-            gen.deobfuscate();
-            args[0] = args[1] + ".temp.jar";
-            outputFile.deleteOnExit();
-        }
         try {
             Oaktree oakTree = new Oaktree();
             JarFile file = new JarFile(args[0]);
@@ -116,6 +105,13 @@ public class Oaktree {
             oakTree.fixForeachOnArray(true);
             oakTree.fixComparators(true, true);
             oakTree.guessAnonymousInnerClasses(true);
+            if (args.length == 3 && Boolean.valueOf(args[2]) == true) {
+                // remapper activate!
+                IntermediaryGenerator gen = new IntermediaryGenerator(new File("map.tiny"), null, oakTree.nodes);
+                gen.remapClassesV2();
+                gen.doProposeEnumFieldsV2();
+                gen.deobfuscate();
+            }
             FileOutputStream os = new FileOutputStream(args[1]);
             oakTree.write(os);
             os.close();
@@ -878,6 +874,10 @@ public class Oaktree {
         if (doLogging) {
             System.out.printf("Recovered %d switch-on-enum switchmap classes! (%d ms)\n", deobfNames.size(), System.currentTimeMillis() - startTime);
         }
+    }
+
+    public List<ClassNode> getClassNodesDirectly() {
+        return nodes;
     }
 
     /**

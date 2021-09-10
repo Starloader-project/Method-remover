@@ -60,13 +60,9 @@ public class ObfToolsPlugin implements Plugin<Project> {
                 }
                 map.getParentFile().mkdirs();
                 File intermediaryJar = gradleProject.file(INTERMEDIARY_JAR);
-                IntermediaryGenerator generator = new IntermediaryGenerator(f, map, intermediaryJar);
-                generator.remapClasses();
-                generator.doProposeEnumFieldsV2();
-                generator.deobfuscate();
                 Oaktree deobfuscator = new Oaktree();
                 try {
-                    JarFile jar = new JarFile(intermediaryJar);
+                    JarFile jar = new JarFile(f);
                     deobfuscator.index(jar);
                     jar.close();
                     deobfuscator.fixInnerClasses();
@@ -75,6 +71,12 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.fixSwitchMaps(true);
                     deobfuscator.fixForeachOnArray(true);
                     deobfuscator.fixComparators(true, true);
+
+                    IntermediaryGenerator generator = new IntermediaryGenerator(map, null, deobfuscator.getClassNodesDirectly());
+                    generator.remapClassesV2();
+                    generator.doProposeEnumFieldsV2();
+                    generator.deobfuscate();
+
                     FileOutputStream fos = new FileOutputStream(intermediaryJar);
                     deobfuscator.write(fos);
                     fos.close();
