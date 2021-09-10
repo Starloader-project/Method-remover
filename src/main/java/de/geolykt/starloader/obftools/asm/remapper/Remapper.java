@@ -44,10 +44,10 @@ import org.objectweb.asm.tree.TypeInsnNode;
  */
 public final class Remapper {
 
-    private final List<ClassNode> targets = new ArrayList<>();
+    private final FieldRenameMap fieldRenames = new FieldRenameMap();
     private final Map<String, ClassNode> nameToNode = new HashMap<>();
     private final Map<String, String> oldToNewClassName = new HashMap<>();
-    private final FieldRenameMap fieldRenames = new FieldRenameMap();
+    private final List<ClassNode> targets = new ArrayList<>();
 
     /**
      * Adds a single class node to remap
@@ -81,34 +81,17 @@ public final class Remapper {
     }
 
     /**
-     * Remaps the name of all target class nodes once {@link #process()} is called.
-     * Class names are remapped alongside method / fields how technically they are remapped last.
+     * Note: due to the circumstances of how the remapper works, this method call may be not required as the remapper
+     * remaps the input ClassNodes without cloning them in any capacity.
      *
-     * @param oldName The old internal class name of the class to remap
-     * @param newName The new internal class name of the class to remap
+     * @return Returns the targets
      */
-    public void remapClassName(String oldName, String newName) {
-        oldToNewClassName.put(oldName, newName);
+    public List<ClassNode> getOutput() {
+        return targets;
     }
 
     /**
-     * Inserts a field renaming entry to the remapping list.
-     * The owner and desc strings must be valid for the current class names, i. e. without {@link #remapClassName(String, String)}
-     * and {@link #process()} applied. The fields are not actually renamed until {@link #process()} is invoked.
-     * These tasks are however removed as soon as {@link #process()} is invoked.
-     *
-     * @param owner The internal name of the current owner of the field
-     * @param desc The descriptor string of the field entry
-     * @param oldName The old name of the field
-     * @param newName The new name of the field
-     * @see Type#getInternalName()
-     */
-    public void remapField(String owner, String desc, String oldName, String newName) {
-        fieldRenames.put(owner, desc, oldName, newName);
-    }
-
-    /**
-     * Processes all remap orders and clearsthe remap orders afterwards. The classes that need to be proceessed remain in the targets
+     * Processes all remap orders and clears the remap orders afterwards. The classes that need to be proceessed remain in the targets
      * list until {@link #clearTargets()} is invoked. This allows for reusabillity of the same remapper instance.
      * Class names are remapped last.
      */
@@ -225,23 +208,170 @@ public final class Remapper {
         oldToNewClassName.clear();
     }
 
-    private void remapModule(ModuleNode module, StringBuilder sharedStringBuilder) {
-        // This is really stupid design
-        if (module.mainClass != null) {
-            String newMainClass = oldToNewClassName.get(module.mainClass);
-            if (newMainClass != null) {
-                module.mainClass = newMainClass;
+    private void remapAnnotation(AnnotationNode annotation, StringBuilder sharedStringBuilder) {
+        String internalName = annotation.desc.substring(1, annotation.desc.length() - 1);
+        String newInternalName = oldToNewClassName.get(internalName);
+        if (newInternalName != null) {
+            annotation.desc = 'L' + newInternalName + ';';
+        }
+        if (annotation.values != null) {
+            int size = annotation.values.size();
+            for (int i = 0; i < size; i++) {
+                @SuppressWarnings("unused") // We are using the cast as a kind of builtin automatic unit test
+                String bitvoid = (String) annotation.values.get(i++);
+                remapAnnotationValue(annotation.values.get(i), i, annotation.values, sharedStringBuilder);
             }
         }
-        if (module.uses != null) {
-            int size = module.uses.size();
+    }
+
+    private void remapAnnotations(List<? extends AnnotationNode> annotations, StringBuilder sharedStringBuilder) {
+        if (annotations == null) {
+            return;
+        }
+        for (AnnotationNode annotation : annotations) {
+            remapAnnotation(annotation, sharedStringBuilder);
+        }
+    }
+
+    private void remapAnnotationValue(Object value, int index, List<Object> values, StringBuilder sharedStringBuilder) {
+        if (value instanceof Type) {
+            String type = ((Type) value).getDescriptor();
+            sharedStringBuilder.setLength(0);
+            if (remapSignature(type, sharedStringBuilder)) {
+                values.set(index, Type.getType(sharedStringBuilder.toString()));
+            }
+        } else if (value instanceof String[]) {
+            String[] enumvals = (String[]) value;
+            String internalName = enumvals[0].substring(1, enumvals[0].length() - 1);
+            enumvals[1] = fieldRenames.optGet(internalName, enumvals[0], enumvals[1]);
+            String newInternalName = oldToNewClassName.get(internalName);
+            if (newInternalName != null) {
+                enumvals[0] = 'L' + newInternalName + ';';
+            }
+        } else if (value instanceof AnnotationNode) {
+            remapAnnotation((AnnotationNode) value, sharedStringBuilder);
+        } else if (value instanceof List) {
+            @SuppressWarnings("unchecked")
+            List<Object> valueList = (List<Object>) value;
+            int size = valueList.size();
             for (int i = 0; i < size; i++) {
-                String service = module.uses.get(i);
-                String remapped = remapInternalName(service, sharedStringBuilder);
-                if (remapped != service) {
-                    module.uses.set(i, remapped);
+                remapAnnotationValue(valueList.get(i), i, valueList, sharedStringBuilder);
+            }
+        } else {
+            // Irrelevant
+        }
+    }
+
+    /**
+     * Remaps the name of all target class nodes once {@link #process()} is called.
+     * Class names are remapped alongside method / fields how technically they are remapped last.
+     *
+     * @param oldName The old internal class name of the class to remap
+     * @param newName The new internal class name of the class to remap
+     */
+    public void remapClassName(String oldName, String newName) {
+        oldToNewClassName.put(oldName, newName);
+    }
+
+    private void remapField(String owner, FieldNode field, StringBuilder sharedStringBuilder) {
+        field.name = fieldRenames.optGet(owner, field.desc, field.name);
+
+        int typeType = field.desc.charAt(0);
+        boolean isObjectArray = typeType == '[';
+        int arrayDimension = 0;
+        if (isObjectArray) {
+            if (field.desc.codePointBefore(field.desc.length()) == ';') {
+                // calculate depth
+                int arrayType;
+                do {
+                    arrayType = field.desc.charAt(++arrayDimension);
+                } while (arrayType == '[');
+            } else {
+                isObjectArray = false;
+            }
+        }
+        if (isObjectArray || typeType == 'L') {
+            // Remap descriptor
+            Type type = Type.getType(field.desc);
+            String internalName = type.getInternalName();
+            String newInternalName = oldToNewClassName.get(internalName);
+            if (newInternalName != null) {
+                if (isObjectArray) {
+                    sharedStringBuilder.setLength(arrayDimension);
+                    for (int i = 0; i < arrayDimension; i++) {
+                        sharedStringBuilder.setCharAt(i, '[');
+                    }
+                    sharedStringBuilder.append(newInternalName);
+                    sharedStringBuilder.append(';');
+                    field.desc = sharedStringBuilder.toString();
+                } else {
+                    field.desc = 'L' + newInternalName + ';';
                 }
             }
+            // Remap signature
+            if (field.signature != null) {
+                sharedStringBuilder.setLength(0);
+                if (remapSignature(field.signature, sharedStringBuilder)) {
+                    field.signature = sharedStringBuilder.toString();
+                }
+            }
+        }
+    }
+
+    /**
+     * Inserts a field renaming entry to the remapping list.
+     * The owner and desc strings must be valid for the current class names, i. e. without {@link #remapClassName(String, String)}
+     * and {@link #process()} applied. The fields are not actually renamed until {@link #process()} is invoked.
+     * These tasks are however removed as soon as {@link #process()} is invoked.
+     *
+     * @param owner The internal name of the current owner of the field
+     * @param desc The descriptor string of the field entry
+     * @param oldName The old name of the field
+     * @param newName The new name of the field
+     * @see Type#getInternalName()
+     */
+    public void remapField(String owner, String desc, String oldName, String newName) {
+        fieldRenames.put(owner, desc, oldName, newName);
+    }
+
+    private void remapFrameNode(FrameNode frameNode, StringBuilder sharedStringBuilder) {
+        if (frameNode.stack != null) {
+            int size = frameNode.stack.size();
+            for (int i = 0; i < size; i++) {
+                Object o = frameNode.stack.get(i);
+                if (o instanceof String) {
+                    String oldName = (String) o;
+                    String newName = remapInternalName(oldName, sharedStringBuilder);
+                    if (oldName != newName) { // instance comparision intended
+                        frameNode.stack.set(i, newName);
+                    }
+                }
+            }
+        }
+        if (frameNode.local != null) {
+            int size = frameNode.local.size();
+            for (int i = 0; i < size; i++) {
+                Object o = frameNode.local.get(i);
+                if (o instanceof String) {
+                    String oldName = (String) o;
+                    String newName = remapInternalName(oldName, sharedStringBuilder);
+                    if (oldName != newName) { // instance comparision intended
+                        frameNode.local.set(i, newName);
+                    }
+                }
+            }
+        }
+    }
+
+    private String remapInternalName(String internalName, StringBuilder sharedStringBuilder) {
+        if (internalName.codePointAt(0) == '[') {
+            return remapSingleDesc(internalName, sharedStringBuilder);
+        } else {
+            String remapped = oldToNewClassName.get(internalName);
+            if (remapped != null) {
+                return remapped;
+            }
+            return internalName;
         }
     }
 
@@ -413,165 +543,28 @@ public final class Remapper {
         }
     }
 
-    private String remapInternalName(String internalName, StringBuilder sharedStringBuilder) {
-        if (internalName.codePointAt(0) == '[') {
-            return remapSingleDesc(internalName, sharedStringBuilder);
-        } else {
-            String remapped = oldToNewClassName.get(internalName);
-            if (remapped != null) {
-                return remapped;
-            }
-            return internalName;
-        }
-    }
-
-    private void remapFrameNode(FrameNode frameNode, StringBuilder sharedStringBuilder) {
-        if (frameNode.stack != null) {
-            int size = frameNode.stack.size();
-            for (int i = 0; i < size; i++) {
-                Object o = frameNode.stack.get(i);
-                if (o instanceof String) {
-                    String oldName = (String) o;
-                    String newName = remapInternalName(oldName, sharedStringBuilder);
-                    if (oldName != newName) { // instance comparision intended
-                        frameNode.stack.set(i, newName);
-                    }
-                }
+    private void remapModule(ModuleNode module, StringBuilder sharedStringBuilder) {
+        // This is really stupid design
+        if (module.mainClass != null) {
+            String newMainClass = oldToNewClassName.get(module.mainClass);
+            if (newMainClass != null) {
+                module.mainClass = newMainClass;
             }
         }
-        if (frameNode.local != null) {
-            int size = frameNode.local.size();
+        if (module.uses != null) {
+            int size = module.uses.size();
             for (int i = 0; i < size; i++) {
-                Object o = frameNode.local.get(i);
-                if (o instanceof String) {
-                    String oldName = (String) o;
-                    String newName = remapInternalName(oldName, sharedStringBuilder);
-                    if (oldName != newName) { // instance comparision intended
-                        frameNode.local.set(i, newName);
-                    }
+                String service = module.uses.get(i);
+                String remapped = remapInternalName(service, sharedStringBuilder);
+                if (remapped != service) {
+                    module.uses.set(i, remapped);
                 }
             }
         }
     }
 
-    private String remapSingleDesc(String input, StringBuilder sharedBuilder) {
-        int indexofL = input.indexOf('L');
-        if (indexofL == -1) {
-            return input;
-        }
-        int length = input.length();
-        String internalName = input.substring(indexofL + 1, length - 1);
-        String newInternalName = oldToNewClassName.get(internalName);
-        if (newInternalName == null) {
-            return input;
-        }
-        sharedBuilder.setLength(indexofL + 1);
-        sharedBuilder.setCharAt(indexofL, 'L');
-        while(indexofL != 0) {
-            sharedBuilder.setCharAt(--indexofL, '[');
-        }
-        sharedBuilder.append(newInternalName);
-        sharedBuilder.append(';');
-        return sharedBuilder.toString();
-    }
-
-    private void remapAnnotation(AnnotationNode annotation, StringBuilder sharedStringBuilder) {
-        String internalName = annotation.desc.substring(1, annotation.desc.length() - 1);
-        String newInternalName = oldToNewClassName.get(internalName);
-        if (newInternalName != null) {
-            annotation.desc = 'L' + newInternalName + ';';
-        }
-        if (annotation.values != null) {
-            int size = annotation.values.size();
-            for (int i = 0; i < size; i++) {
-                @SuppressWarnings("unused") // We are using the cast as a kind of builtin automatic unit test
-                String bitvoid = (String) annotation.values.get(i++);
-                remapAnnotationValue(annotation.values.get(i), i, annotation.values, sharedStringBuilder);
-            }
-        }
-    }
-
-    private void remapAnnotations(List<? extends AnnotationNode> annotations, StringBuilder sharedStringBuilder) {
-        if (annotations == null) {
-            return;
-        }
-        for (AnnotationNode annotation : annotations) {
-            remapAnnotation(annotation, sharedStringBuilder);
-        }
-    }
-
-    private void remapAnnotationValue(Object value, int index, List<Object> values, StringBuilder sharedStringBuilder) {
-        if (value instanceof Type) {
-            String type = ((Type) value).getDescriptor();
-            sharedStringBuilder.setLength(0);
-            if (remapSignature(type, sharedStringBuilder)) {
-                values.set(index, Type.getType(sharedStringBuilder.toString()));
-            }
-        } else if (value instanceof String[]) {
-            String[] enumvals = (String[]) value;
-            String internalName = enumvals[0].substring(1, enumvals[0].length() - 1);
-            enumvals[1] = fieldRenames.optGet(internalName, enumvals[0], enumvals[1]);
-            String newInternalName = oldToNewClassName.get(internalName);
-            if (newInternalName != null) {
-                enumvals[0] = 'L' + newInternalName + ';';
-            }
-        } else if (value instanceof AnnotationNode) {
-            remapAnnotation((AnnotationNode) value, sharedStringBuilder);
-        } else if (value instanceof List) {
-            @SuppressWarnings("unchecked")
-            List<Object> valueList = (List<Object>) value;
-            int size = valueList.size();
-            for (int i = 0; i < size; i++) {
-                remapAnnotationValue(valueList.get(i), i, valueList, sharedStringBuilder);
-            }
-        } else {
-            // Irrelevant
-        }
-    }
-
-    private void remapField(String owner, FieldNode field, StringBuilder sharedStringBuilder) {
-        field.name = fieldRenames.optGet(owner, field.desc, field.name);
-
-        int typeType = field.desc.charAt(0);
-        boolean isObjectArray = typeType == '[';
-        int arrayDimension = 0;
-        if (isObjectArray) {
-            if (field.desc.codePointBefore(field.desc.length()) == ';') {
-                // calculate depth
-                int arrayType;
-                do {
-                    arrayType = field.desc.charAt(++arrayDimension);
-                } while (arrayType == '[');
-            } else {
-                isObjectArray = false;
-            }
-        }
-        if (isObjectArray || typeType == 'L') {
-            // Remap descriptor
-            Type type = Type.getType(field.desc);
-            String internalName = type.getInternalName();
-            String newInternalName = oldToNewClassName.get(internalName);
-            if (newInternalName != null) {
-                if (isObjectArray) {
-                    sharedStringBuilder.setLength(arrayDimension);
-                    for (int i = 0; i < arrayDimension; i++) {
-                        sharedStringBuilder.setCharAt(i, '[');
-                    }
-                    sharedStringBuilder.append(newInternalName);
-                    sharedStringBuilder.append(';');
-                    field.desc = sharedStringBuilder.toString();
-                } else {
-                    field.desc = 'L' + newInternalName + ';';
-                }
-            }
-            // Remap signature
-            if (field.signature != null) {
-                sharedStringBuilder.setLength(0);
-                if (remapSignature(field.signature, sharedStringBuilder)) {
-                    field.signature = sharedStringBuilder.toString();
-                }
-            }
-        }
+    private boolean remapSignature(String signature, StringBuilder out) {
+        return remapSignature(out, signature, 0, signature.length());
     }
 
     private boolean remapSignature(StringBuilder signatureOut, String signature, int start, int end) {
@@ -653,17 +646,24 @@ public final class Remapper {
         }
     }
 
-    private boolean remapSignature(String signature, StringBuilder out) {
-        return remapSignature(out, signature, 0, signature.length());
-    }
-
-    /**
-     * Note: due to the circumstances of how the remapper works, this method call may be not required as the remapper
-     * remaps the input ClassNodes without cloning them in any capacity.
-     *
-     * @return Returns the targets
-     */
-    public List<ClassNode> getOutput() {
-        return targets;
+    private String remapSingleDesc(String input, StringBuilder sharedBuilder) {
+        int indexofL = input.indexOf('L');
+        if (indexofL == -1) {
+            return input;
+        }
+        int length = input.length();
+        String internalName = input.substring(indexofL + 1, length - 1);
+        String newInternalName = oldToNewClassName.get(internalName);
+        if (newInternalName == null) {
+            return input;
+        }
+        sharedBuilder.setLength(indexofL + 1);
+        sharedBuilder.setCharAt(indexofL, 'L');
+        while(indexofL != 0) {
+            sharedBuilder.setCharAt(--indexofL, '[');
+        }
+        sharedBuilder.append(newInternalName);
+        sharedBuilder.append(';');
+        return sharedBuilder.toString();
     }
 }

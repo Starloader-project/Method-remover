@@ -47,9 +47,9 @@ public class PostprocessTask extends Jar {
 } class TransformedCopyTask implements CopyAction {
 
     private final String annotation;
+    private final File mapLocation;
     private final File src;
     private final File targetFinal;
-    private final File mapLocation;
 
     public TransformedCopyTask(String annotation, File targetFinal, File source, File mapLocation) {
         this.annotation = annotation;

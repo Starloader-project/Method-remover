@@ -35,7 +35,21 @@ import org.objectweb.asm.tree.TypeInsnNode;
 
 import de.geolykt.starloader.obftools.asm.remapper.Remapper;
 
-public class IntermediaryGenerator {
+class ClassNodeNameComparator implements Comparator<ClassNode> {
+
+    public static final ClassNodeNameComparator INSTANCE = new ClassNodeNameComparator();
+
+    @Override
+    public int compare(ClassNode o1, ClassNode o2) {
+        int len1 = o1.name.length();
+        int len2 = o2.name.length();
+        if (len1 == len2) {
+            return o1.name.compareTo(o2.name);
+        } else {
+            return len1 - len2;
+        }
+    }
+} public class IntermediaryGenerator {
 
     private final File map;
     private final List<ClassNode> nodes = new ArrayList<>();
@@ -79,6 +93,16 @@ public class IntermediaryGenerator {
         }
     }
 
+    private String createString(int counter) {
+        if (counter > 25) {
+            int first = counter / 26;
+            int second = counter % 26;
+            return String.valueOf(new char[] {(char) ('`' + first), (char) ('a' + second)});
+        } else {
+            return String.valueOf((char) ('a' + counter));
+        }
+    }
+
     public void deobfuscate() {
         remapper.process();
         if (output != null) {
@@ -100,6 +124,7 @@ public class IntermediaryGenerator {
             }
         }
     }
+
 
     /**
      * Proposes new field names within enum class that can be easily guessed by the computer.
@@ -214,55 +239,19 @@ public class IntermediaryGenerator {
         }
     }
 
-
     public List<ClassNode> getAsClassNodes() {
         return nodes;
     }
 
-    public void remapClasses() {
-        BufferedWriter bw = null;
-        if (map != null) {
-            try {
-                @SuppressWarnings("resource")
-                BufferedWriter dontcomplain = new BufferedWriter(new FileWriter(map, StandardCharsets.UTF_8, false));
-                bw = dontcomplain;
-                bw.write("v1\tofficial\tintermediary\n");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        for (ClassNode node : nodes) {
-            char[] nameChars = node.name.toCharArray();
-            boolean illegalClassName = (nameChars[0] == 'd' && nameChars[1] == 'o') || (nameChars[0] == 'i' && nameChars[1] == 'f');
-            if (!illegalClassName && (nameChars.length < 2 || nameChars[nameChars.length - 2] != '/')) {
-                continue;
-            }
-
-            char[] newName = new char[nameChars.length + 6];
-            System.arraycopy(nameChars, 0, newName, 0, nameChars.length - (illegalClassName ? 2 : 1)); // package
-            newName[newName.length - 1] = nameChars[nameChars.length - 1]; // actual name
-            if (illegalClassName) {
-                newName[newName.length - 2] = nameChars[nameChars.length - 2];
-            }
-            System.arraycopy("class_".toCharArray(), 0, newName, newName.length - (6 + (illegalClassName ? 2 : 1)), 6); // class_
-
-            remapper.remapClassName(node.name, String.copyValueOf(newName));
-            if (bw != null) {
-                try {
-                    bw.write("CLASS\t");
-                    bw.write(nameChars);
-                    bw.write('\t');
-                    bw.write(newName);
-                    bw.write('\n'); // The tiny format does not make use of system-dependent newlines
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
+    private void remapClass(String oldName, String newName, BufferedWriter bw) {
+        remapper.remapClassName(oldName, newName);
         if (bw != null) {
             try {
-                bw.flush();
-                bw.close();
+                bw.write("CLASS\t");
+                bw.write(oldName);
+                bw.write('\t');
+                bw.write(newName);
+                bw.write('\n'); // The tiny format does not make use of system-dependent newlines
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -379,45 +368,6 @@ public class IntermediaryGenerator {
             for (ClassNode node : packageNode.getValue()) {
                 remapClass(node.name, packageName + prefix + createString(counter++), writer);
             }
-        }
-    }
-
-    private String createString(int counter) {
-        if (counter > 25) {
-            int first = counter / 26;
-            int second = counter % 26;
-            return String.valueOf(new char[] {(char) ('`' + first), (char) ('a' + second)});
-        } else {
-            return String.valueOf((char) ('a' + counter));
-        }
-    }
-
-    private void remapClass(String oldName, String newName, BufferedWriter bw) {
-        remapper.remapClassName(oldName, newName);
-        if (bw != null) {
-            try {
-                bw.write("CLASS\t");
-                bw.write(oldName);
-                bw.write('\t');
-                bw.write(newName);
-                bw.write('\n'); // The tiny format does not make use of system-dependent newlines
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-    }
-} class ClassNodeNameComparator implements Comparator<ClassNode> {
-
-    public static final ClassNodeNameComparator INSTANCE = new ClassNodeNameComparator();
-
-    @Override
-    public int compare(ClassNode o1, ClassNode o2) {
-        int len1 = o1.name.length();
-        int len2 = o2.name.length();
-        if (len1 == len2) {
-            return o1.name.compareTo(o2.name);
-        } else {
-            return len1 - len2;
         }
     }
 }
