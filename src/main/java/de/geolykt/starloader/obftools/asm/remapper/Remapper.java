@@ -45,6 +45,7 @@ import org.objectweb.asm.tree.TypeInsnNode;
 public final class Remapper {
 
     private final FieldRenameMap fieldRenames = new FieldRenameMap();
+    private final MethodRenameMap methodRenames = new MethodRenameMap();
     private final Map<String, ClassNode> nameToNode = new HashMap<>();
     private final Map<String, String> oldToNewClassName = new HashMap<>();
     private final List<ClassNode> targets = new ArrayList<>();
@@ -148,6 +149,9 @@ public final class Remapper {
                 }
             }
             if (node.outerClass != null) {
+                if (node.outerMethod != null && node.outerMethodDesc != null) {
+                    node.outerMethod = methodRenames.optGet(node.outerClass, node.outerMethodDesc, node.outerMethod);
+                }
                 node.outerClass = remapInternalName(node.outerClass, sharedStringBuilder);
             }
             if (node.outerMethodDesc != null) {
@@ -259,6 +263,42 @@ public final class Remapper {
             }
         } else {
             // Irrelevant
+        }
+    }
+
+    private void remapBSMArg(final Object[] bsmArgs, final int index, final StringBuilder sharedStringBuilder) {
+        Object bsmArg = bsmArgs[index];
+        if (bsmArg instanceof Type) {
+            Type type = (Type) bsmArg;
+            if (type.getSort() != Type.METHOD) {
+                throw new IllegalArgumentException("Unexpected bsm arg Type sort.");
+            }
+            sharedStringBuilder.setLength(0);
+            if (remapSignature(type.getDescriptor(), sharedStringBuilder)) {
+                bsmArgs[index] = Type.getMethodType(sharedStringBuilder.toString());
+            }
+        } else if (bsmArg instanceof Handle) {
+            Handle handle = (Handle) bsmArg;
+            String oldName = handle.getName();
+            String hOwner = handle.getOwner();
+            String newName = methodRenames.optGet(hOwner, handle.getDesc(), oldName);
+            String newOwner = oldToNewClassName.get(hOwner);
+            boolean modified = oldName != newName;
+            if (newOwner != null) {
+                hOwner = newOwner;
+                modified = true;
+            }
+            String desc = handle.getDesc();
+            sharedStringBuilder.setLength(0);
+            if (remapSignature(desc, sharedStringBuilder)) {
+                desc = sharedStringBuilder.toString();
+                modified = true;
+            }
+            if (modified) {
+                bsmArgs[index] = new Handle(handle.getTag(), hOwner, newName, desc, handle.isInterface());
+            }
+        } else {
+            throw new IllegalArgumentException("Unexpected bsm arg class at index " + index + " for " + Arrays.toString(bsmArgs) + ". Class is " + bsmArg.getClass().getName());
         }
     }
 
@@ -376,6 +416,7 @@ public final class Remapper {
     }
 
     private void remapMethod(ClassNode owner, MethodNode method, StringBuilder sharedStringBuilder) {
+        method.name = methodRenames.optGet(owner.name, method.desc, method.name);
         for (int i = 0; i < method.exceptions.size(); i++) {
             String newExceptionName = oldToNewClassName.get(method.exceptions.get(i));
             if (newExceptionName != null) {
@@ -489,28 +530,14 @@ public final class Remapper {
                     remapFrameNode((FrameNode) insn, sharedStringBuilder);
                 } else if (insn instanceof InvokeDynamicInsnNode) {
                     InvokeDynamicInsnNode specialisedInsn = (InvokeDynamicInsnNode) insn;
+                    Object[] bsmArgs = specialisedInsn.bsmArgs;
+                    int arglen = bsmArgs.length;
+                    for (int i = 0; i < arglen; i++) {
+                        remapBSMArg(bsmArgs, i, sharedStringBuilder);
+                    }
                     sharedStringBuilder.setLength(0);
                     if (remapSignature(specialisedInsn.desc, sharedStringBuilder)) {
                         specialisedInsn.desc = sharedStringBuilder.toString();
-                    }
-                    if (specialisedInsn.bsmArgs.length != 1) {
-                        Handle handle = (Handle) specialisedInsn.bsmArgs[1];
-                        String hOwner = handle.getOwner();
-                        String newOwner = oldToNewClassName.get(hOwner);
-                        boolean modified = false;
-                        if (newOwner != null) {
-                            hOwner = newOwner;
-                            modified = true;
-                        }
-                        String desc = handle.getDesc();
-                        sharedStringBuilder.setLength(0);
-                        if (remapSignature(desc, sharedStringBuilder)) {
-                            desc = sharedStringBuilder.toString();
-                            modified = true;
-                        }
-                        if (modified) {
-                            specialisedInsn.bsmArgs[1] = new Handle(handle.getTag(), hOwner, handle.getName(), desc, handle.isInterface());
-                        }
                     }
                 } else if (insn instanceof LdcInsnNode) {
                     LdcInsnNode specialisedInsn = (LdcInsnNode) insn;
@@ -523,6 +550,7 @@ public final class Remapper {
                     }
                 } else if (insn instanceof MethodInsnNode) {
                     MethodInsnNode instruction = (MethodInsnNode) insn;
+                    instruction.name = methodRenames.optGet(instruction.owner, instruction.desc, instruction.name);
                     String newOwner = oldToNewClassName.get(instruction.owner);
                     if (newOwner != null) {
                         instruction.owner = newOwner;
@@ -541,6 +569,25 @@ public final class Remapper {
                 insn = insn.getNext();
             }
         }
+    }
+
+    /**
+     * Inserts a method renaming entry to the remapping list.
+     * The owner and desc strings must be valid for the current class names, i. e. without {@link #remapClassName(String, String)}
+     * and {@link #process()} applied. The method are not actually renamed until {@link #process()} is invoked.
+     *<p>
+     * <b>WARNING: if the method is non-static and non-private and the owning class non-final then it is recommended that the change is
+     * propagated through the entire tree. Renaming a method will only affect one class, not multiple - which may void
+     * overrides or other similar behaviours.</b>
+     *
+     * @param owner The internal name of the current owner of the method
+     * @param desc The descriptor string of the method entry
+     * @param oldName The old name of the method
+     * @param newName The new name of the method
+     * @see Type#getInternalName()
+     */
+    public void remapMethod(String owner, String desc, String oldName, String newName) {
+        methodRenames.put(owner, desc, oldName, newName);
     }
 
     private void remapModule(ModuleNode module, StringBuilder sharedStringBuilder) {

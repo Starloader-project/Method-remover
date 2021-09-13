@@ -107,14 +107,17 @@ public class Oaktree {
             oakTree.guessAnonymousInnerClasses(true);
             if (args.length == 3 && Boolean.valueOf(args[2]) == true) {
                 // remapper activate!
-                IntermediaryGenerator gen = new IntermediaryGenerator(new File("map.tiny"), null, oakTree.nodes);
+                IntermediaryGenerator gen = new IntermediaryGenerator(new File("map.tiny"), new File(args[1]), oakTree.nodes);
+                gen.addResources(new File(args[0]));
                 gen.remapClassesV2();
                 gen.doProposeEnumFieldsV2();
+                gen.remapGetters();
                 gen.deobfuscate();
+            } else {
+                FileOutputStream os = new FileOutputStream(args[1]);
+                oakTree.write(os);
+                os.close();
             }
-            FileOutputStream os = new FileOutputStream(args[1]);
-            oakTree.write(os);
-            os.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -1209,12 +1212,12 @@ public class Oaktree {
                             }
                         }
                         if (!alreadyDeclaredLVT) {
-                            // Quiltflower has a bug where it does not correctly identify LVT entires
-                            // and acts as if they weren't there. This preciesely occours as the decompiler
+                            // Quiltflower has a bug where it does not correctly identify LVT entries
+                            // and acts as if they weren't there. This precisely occurs as the decompiler
                             // expects that the start label provided by of the LVT entry is equal to the first declaration of the
                             // entry. While I have already brought forward a fix for this, unfortunately this results in a few other
-                            // (more serious) issues that result in formerly broken but technically correct and compileable code
-                            // being uncompileable. This makes it unlikely that the fix would be pushed anytime soon.
+                            // (more serious) issues that result in formerly broken but technically correct and compilable code
+                            // being uncompilable. This makes it unlikely that the fix would be pushed anytime soon.
                             // My assumption is that this has something to do with another bug in the decompiler,
                             // but in the meantime I guess that we will have to work around this bug by adding a LabelNode
                             // just before the first astore operation.
