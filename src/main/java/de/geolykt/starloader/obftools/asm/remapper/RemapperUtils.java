@@ -55,7 +55,11 @@ public final class RemapperUtils {
                     if (colums.length != 5) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 5.");
                     }
-                    remapper.remapMethod(colums[1], colums[2], colums[3], colums[4]);
+                    try {
+                        remapper.remapMethod(colums[1], colums[2], colums[3], colums[4]);
+                    } catch (ConflicitingMappingException e) {
+                        e.printStackTrace();
+                    }
                 } else if (type.equals("FIELD")) {
                     // Format: FIELD owner descriptor originalName newName
                     if (colums.length != 5) {
@@ -109,7 +113,11 @@ public final class RemapperUtils {
                     if (colums.length != 5) {
                         throw new IllegalStateException("Line " + lineNr + " is of type CLASS, but only " + colums.length + " colums are present, even though it expects 5.");
                     }
-                    remapper.remapMethod(colums[1], colums[2], colums[3], colums[4]);
+                    try {
+                        remapper.remapMethod(colums[1], colums[2], colums[3], colums[4]);
+                    } catch (ConflicitingMappingException e) {
+                        e.printStackTrace();
+                    }
                 } else if (type.equals("FIELD")) {
                     // Format: FIELD owner descriptor originalName newName
                     if (colums.length != 5) {

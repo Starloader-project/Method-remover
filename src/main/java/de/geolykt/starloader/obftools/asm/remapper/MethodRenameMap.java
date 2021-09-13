@@ -90,8 +90,26 @@ final class MethodReference {
         return renames.getOrDefault(new MethodReference(owner, descriptor, oldName), oldName);
     }
 
-    public void put(String owner, String descriptor, String name, String newName) {
-        renames.put(new MethodReference(owner, descriptor, name), newName);
+    public void put(String owner, String descriptor, String name, String newName) throws ConflicitingMappingException {
+        MethodReference ref = new MethodReference(owner, descriptor, name);
+        String oldMapping = renames.get(ref);
+        if (oldMapping == null) {
+            renames.put(ref, Objects.requireNonNull(newName, "newName cannot be null."));
+        } else if (!oldMapping.equals(newName)) {
+            throw new ConflicitingMappingException("Overriding method rename for method " + ref.toString());
+        }
+    }
+
+    /**
+     * Removes a method remapping entry from the method remapping list. This method practically undoes {@link #remapMethod(String, String, String, String)}.
+     * Like it it only affects a SINGLE method in a SINGLE class and it's references. Note that implicitly declared/inherited methods must also be added to the remap list.
+     *
+     * @param owner The class of the method that should not be remapped
+     * @param desc The descriptor of the method to not remap
+     * @param name The name of the method that should not be remapped
+     */
+    public void remove(String owner, String desc, String name) {
+        renames.remove(new MethodReference(owner, desc, name));
     }
 
     public int size() {

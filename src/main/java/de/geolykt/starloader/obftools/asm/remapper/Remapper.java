@@ -37,10 +37,6 @@ import org.objectweb.asm.tree.TypeInsnNode;
  * Additionally, this is a no-bullshit remapper. It will only remap, not change your Access flags,
  * LVT entries or anything like that. If you want a deobfuscator,
  * use {@link de.geolykt.starloader.obftools.asm.Oaktree} after remapping.
- *
- * <hr/>
- * This remapper doesn't yet support remapping method names as this is not yet needed in the environment the remapper
- * was made for, however this functionality will eventually be added.
  */
 public final class Remapper {
 
@@ -585,8 +581,9 @@ public final class Remapper {
      * @param oldName The old name of the method
      * @param newName The new name of the method
      * @see Type#getInternalName()
+     * @throws If a mapping error occurs.
      */
-    public void remapMethod(String owner, String desc, String oldName, String newName) {
+    public void remapMethod(String owner, String desc, String oldName, String newName) throws ConflicitingMappingException {
         methodRenames.put(owner, desc, oldName, newName);
     }
 
@@ -712,5 +709,17 @@ public final class Remapper {
         sharedBuilder.append(newInternalName);
         sharedBuilder.append(';');
         return sharedBuilder.toString();
+    }
+
+    /**
+     * Removes a method remapping entry from the method remapping list. This method practically undoes {@link #remapMethod(String, String, String, String)}.
+     * Like it it only affects a SINGLE method in a SINGLE class and it's references. Note that implicitly declared/inherited methods must also be added to the remap list.
+     *
+     * @param owner The class of the method that should not be remapped
+     * @param desc The descriptor of the method to not remap
+     * @param name The name of the method that should not be remapped
+     */
+    public void removeRemap(String owner, String desc, String name) {
+        methodRenames.remove(owner, desc, name);
     }
 }

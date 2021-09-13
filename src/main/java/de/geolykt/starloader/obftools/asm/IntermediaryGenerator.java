@@ -16,8 +16,10 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -43,6 +45,7 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
+import de.geolykt.starloader.obftools.asm.remapper.ConflicitingMappingException;
 import de.geolykt.starloader.obftools.asm.remapper.Remapper;
 
 class ClassNodeNameComparator implements Comparator<ClassNode> {
@@ -406,7 +409,8 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             }
         }
 
-        Map<FieldReference, Optional<MethodNode>> getters = new LinkedHashMap<>(nodes.size());
+        // Order is very important here as the abort order must be deterministic
+        Map<FieldReference, Optional<MethodNode>> getters = new TreeMap<>(new AlphabeticFieldReferenceComparator());
         HashMap<String, ClassNode> name2Node = new HashMap<>(nodes.size());
         HashMap<String, List<String>> directSubtypes = new HashMap<>(nodes.size());
 
@@ -482,7 +486,8 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         for (Map.Entry<FieldReference, Optional<MethodNode>> entry : getters.entrySet()) {
             if (entry.getValue().isPresent()) {
                 MethodNode method = entry.getValue().get();
-                if ((method.access & Opcodes.ACC_STATIC) != 0) {
+                boolean isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
+                if (isStatic) {
                     hierarchicalGetters.put(method, Set.of(entry.getKey().getOwner()));
                     continue;
                 }
@@ -513,33 +518,50 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             if (field == null) {
                 throw new NullPointerException();
             }
+            sharedBuilder.setLength(0);
+            if (field.name.length() > 2) {
+                sharedBuilder.append("get");
+                sharedBuilder.appendCodePoint(Character.toUpperCase(field.name.codePointAt(0)));
+                sharedBuilder.append(field.name.substring(1));
+            } else {
+                sharedBuilder.append("get_");
+                sharedBuilder.append(field.name);
+            }
+            String newName = sharedBuilder.toString();
+            // WARNING: abort order must be deterministic
+            boolean aborted = false;
+            ArrayList<String> successfullClasses = new ArrayList<>();
             for (String clazz : entry.getValue()) {
-                sharedBuilder.setLength(0);
-                if (field.name.length() > 2) {
-                    sharedBuilder.append("get");
-                    sharedBuilder.appendCodePoint(Character.toUpperCase(field.name.codePointAt(0)));
-                    sharedBuilder.append(field.name.substring(1));
-                } else {
-                    sharedBuilder.append("get_");
-                    sharedBuilder.append(field.name);
+                try {
+                    remapper.remapMethod(clazz, method.desc, method.name, newName);
+                    successfullClasses.add(clazz);
+                } catch (ConflicitingMappingException e) {
+                    aborted = true;
+                    break;
                 }
-                String newName = sharedBuilder.toString();
-                if (bw != null) {
-                    try {
-                        bw.write("METHOD\t");
-                        bw.write(clazz);
-                        bw.write('\t');
-                        bw.write(method.desc);
-                        bw.write('\t');
-                        bw.write(method.name);
-                        bw.write('\t');
-                        bw.write(newName);
-                        bw.write('\n');
-                    } catch (IOException e) {
-                        e.printStackTrace();
+            }
+            if (aborted) {
+                successfullClasses.forEach(str -> {
+                    remapper.removeRemap(str, method.desc, method.name);
+                });
+            } else {
+                for (String clazz : entry.getValue()) {
+                    if (bw != null) {
+                        try {
+                            bw.write("METHOD\t");
+                            bw.write(clazz);
+                            bw.write('\t');
+                            bw.write(method.desc);
+                            bw.write('\t');
+                            bw.write(method.name);
+                            bw.write('\t');
+                            bw.write(newName);
+                            bw.write('\n');
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
                     }
                 }
-                remapper.remapMethod(clazz, method.desc, method.name, newName);
             }
         }
 
@@ -691,5 +713,32 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             return OverrideScope.ALWAYS;
         }
         return OverrideScope.PACKAGE;
+    }
+} final class StringTriple {
+    private final String a;
+    private final String b;
+    private final String c;
+
+    public StringTriple(final String a, final String b, final String c) {
+        this.a = a;
+        this.b = b;
+        this.c = c;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (obj == this) {
+            return true;
+        }
+        if (obj instanceof StringTriple) {
+            StringTriple other = (StringTriple) obj;
+            return other.a.equals(this.a) && other.b.equals(this.b) && other.c.equals(this.c);
+        }
+        return false;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(this.a, this.b, this.c);
     }
 }
