@@ -18,10 +18,6 @@ repositories {
         name 'geolykt'
         url 'https://geolykt.de/maven'
     }
-    maven {
-        name = 'QuiltMC Releases'
-        url 'https://maven.quiltmc.org/repository/release/'
-    }
     mavenCentral()
 }
 

@@ -111,7 +111,7 @@ public class Oaktree {
                 gen.addResources(new File(args[0]));
                 gen.remapClassesV2();
                 gen.doProposeEnumFieldsV2();
-                gen.remapGetters();
+                // gen.remapGetters();
                 gen.deobfuscate();
             } else {
                 FileOutputStream os = new FileOutputStream(args[1]);

@@ -16,7 +16,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
@@ -397,6 +396,10 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         }
     }
 
+    /**
+     * @deprecated Method remapping is highly unstable and not really recommended. Method remapping internals might need an overhaul in the (near) future.
+     */
+    @Deprecated
     public void remapGetters() {
         BufferedWriter bw = null;
         if (map != null) {
@@ -542,7 +545,7 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             }
             if (aborted) {
                 successfullClasses.forEach(str -> {
-                    remapper.removeRemap(str, method.desc, method.name);
+                    remapper.removeMethodRemap(str, method.desc, method.name);
                 });
             } else {
                 for (String clazz : entry.getValue()) {
@@ -713,32 +716,5 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             return OverrideScope.ALWAYS;
         }
         return OverrideScope.PACKAGE;
-    }
-} final class StringTriple {
-    private final String a;
-    private final String b;
-    private final String c;
-
-    public StringTriple(final String a, final String b, final String c) {
-        this.a = a;
-        this.b = b;
-        this.c = c;
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (obj == this) {
-            return true;
-        }
-        if (obj instanceof StringTriple) {
-            StringTriple other = (StringTriple) obj;
-            return other.a.equals(this.a) && other.b.equals(this.b) && other.c.equals(this.c);
-        }
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(this.a, this.b, this.c);
     }
 }

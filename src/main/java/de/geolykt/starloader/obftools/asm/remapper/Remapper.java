@@ -38,7 +38,7 @@ import org.objectweb.asm.tree.TypeInsnNode;
  * LVT entries or anything like that. If you want a deobfuscator,
  * use {@link de.geolykt.starloader.obftools.asm.Oaktree} after remapping.
  */
-public final class Remapper {
+public final class Remapper implements IRemapper {
 
     private final FieldRenameMap fieldRenames = new FieldRenameMap();
     private final MethodRenameMap methodRenames = new MethodRenameMap();
@@ -83,12 +83,13 @@ public final class Remapper {
      *
      * @return Returns the targets
      */
+    @Override
     public List<ClassNode> getOutput() {
         return targets;
     }
 
     /**
-     * Processes all remap orders and clears the remap orders afterwards. The classes that need to be proceessed remain in the targets
+     * Processes all remap orders and clears the remap orders afterwards. The classes that need to be processed remain in the targets
      * list until {@link #clearTargets()} is invoked. This allows for reusabillity of the same remapper instance.
      * Class names are remapped last.
      */
@@ -366,6 +367,7 @@ public final class Remapper {
      * @param newName The new name of the field
      * @see Type#getInternalName()
      */
+    @Override
     public void remapField(String owner, String desc, String oldName, String newName) {
         fieldRenames.put(owner, desc, oldName, newName);
     }
@@ -583,6 +585,7 @@ public final class Remapper {
      * @see Type#getInternalName()
      * @throws If a mapping error occurs.
      */
+    @Override
     public void remapMethod(String owner, String desc, String oldName, String newName) throws ConflicitingMappingException {
         methodRenames.put(owner, desc, oldName, newName);
     }
@@ -719,7 +722,8 @@ public final class Remapper {
      * @param desc The descriptor of the method to not remap
      * @param name The name of the method that should not be remapped
      */
-    public void removeRemap(String owner, String desc, String name) {
+    @Override
+    public void removeMethodRemap(String owner, String desc, String name) {
         methodRenames.remove(owner, desc, name);
     }
 }
