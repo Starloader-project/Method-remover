@@ -247,7 +247,7 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                                         bw.write("FIELD\t");
                                         bw.write(node.name);
                                         bw.write('\t');
-                                        bw.write(field.desc);
+                                        bw.write(expectedDesc);
                                         bw.write('\t');
                                         bw.write(field.name);
                                         bw.write('\t');
@@ -320,7 +320,7 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             String className = node.name.substring(lastSlash + 1);
             String packageName = node.name.substring(0, lastSlash);
             if (packageName.startsWith("org/hamcrest") || packageName.startsWith("org/lwjgl")) {
-                // the three packages contain classes that should not be remapped
+                // the three (?) packages contain classes that should not be remapped
                 continue;
             }
             if (className.length() < 3) {

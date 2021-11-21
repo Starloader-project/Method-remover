@@ -38,8 +38,9 @@ public class MethodRenameMap {
     }
 
     /**
-     * Removes a method remapping entry from the method remapping list. This method practically undoes {@link #remapMethod(String, String, String, String)}.
-     * Like it it only affects a SINGLE method in a SINGLE class and it's references. Note that implicitly declared/inherited methods must also be added to the remap list.
+     * Removes a method remapping entry from the method remapping list. This method practically undoes {@link MethodRenameMap#put(String, String, String, String)}.
+     * Like put remove only affects a SINGLE method in a SINGLE class and it's references.
+     * Note that implicitly declared/inherited methods must also be added to the remap list, sperately.
      *
      * @param owner The class of the method that should not be remapped
      * @param desc The descriptor of the method to not remap
