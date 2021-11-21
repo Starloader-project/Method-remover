@@ -2,7 +2,6 @@ package de.geolykt.starloader.obftools;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.jar.JarFile;
@@ -72,14 +71,12 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.fixForeachOnArray(true);
                     deobfuscator.fixComparators(true, true);
 
-                    IntermediaryGenerator generator = new IntermediaryGenerator(map, null, deobfuscator.getClassNodesDirectly());
+                    IntermediaryGenerator generator = new IntermediaryGenerator(map, intermediaryJar, deobfuscator.getClassNodesDirectly());
+                    generator.addResources(f);
                     generator.remapClassesV2();
                     generator.doProposeEnumFieldsV2();
+                    generator.remapGetters();
                     generator.deobfuscate();
-
-                    FileOutputStream fos = new FileOutputStream(intermediaryJar);
-                    deobfuscator.write(fos);
-                    fos.close();
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
