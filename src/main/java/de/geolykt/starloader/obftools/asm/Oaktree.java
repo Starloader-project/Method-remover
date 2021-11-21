@@ -463,6 +463,7 @@ public class Oaktree {
                 if (!skip) {
                     // Apply fixup
                     // We are using 16400 for access, but are there times where this is not wanted?
+                    // 16400 = ACC_FINAL | ACC_ENUM
                     InnerClassNode innerNode = new InnerClassNode(node.name, null, null, 16400);
                     parents.get(node.superName).add(innerNode);
                     node.outerClass = node.superName;
@@ -484,7 +485,8 @@ public class Oaktree {
                     InnerClassNode innerClassNode;
                     if (innerMost.matches("^[0-9]+$")) {
                         // Anonymous class
-                        innerClassNode = new InnerClassNode(node.name, null, null, node.access);
+                        // We know that ACC_SUPER is invalid for inner classes, so we remove that flag
+                        innerClassNode = new InnerClassNode(node.name, null, null, node.access & ~Opcodes.ACC_SUPER);
                         node.outerClass = outerNode;
                     } else {
                         // We need to check for static inner classes.
@@ -535,15 +537,14 @@ public class Oaktree {
                                 }
                             }
                         }
-                        if (staticInnerClass) {
-                            if (!implicitStatic) {
-                                node.access |= Opcodes.ACC_STATIC; // not sure if that is valid but eh
-                            }
-                        } else {
+                        // Don't fall to the temptation of adding ACC_STATIC to the class node.
+                        // According the the verifier it is not legal to do so. However the JVM does not care
+                        if (!staticInnerClass) {
                             // Beware of https://docs.oracle.com/javase/specs/jls/se16/html/jls-8.html#jls-8.1.3
                             node.outerClass = outerNode;
                         }
-                        innerClassNode = new InnerClassNode(node.name, outerNode, innerMost, node.access);
+                        // Super is not allowed for inner class nodes
+                        innerClassNode = new InnerClassNode(node.name, outerNode, innerMost, node.access & ~Opcodes.ACC_SUPER);
                     }
                     parents.get(outerNode).add(innerClassNode);
                     splitInner.put(node.name, innerClassNode);
