@@ -111,7 +111,9 @@ public class Oaktree {
                 gen.addResources(new File(args[0]));
                 gen.remapClassesV2();
                 gen.doProposeEnumFieldsV2();
-                // gen.remapGetters();
+                long startGetters = System.currentTimeMillis();
+                gen.remapGetters();
+                System.out.println("Getters remapped in " + (System.currentTimeMillis() - startGetters) + " ms");
                 gen.deobfuscate();
             } else {
                 FileOutputStream os = new FileOutputStream(args[1]);

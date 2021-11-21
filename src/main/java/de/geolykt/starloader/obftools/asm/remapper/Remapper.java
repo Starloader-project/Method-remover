@@ -90,7 +90,7 @@ public final class Remapper implements IRemapper {
 
     /**
      * Processes all remap orders and clears the remap orders afterwards. The classes that need to be processed remain in the targets
-     * list until {@link #clearTargets()} is invoked. This allows for reusabillity of the same remapper instance.
+     * list until {@link #clearTargets()} is invoked. This allows for reusability of the same remapper instance.
      * Class names are remapped last.
      */
     public void process() {
@@ -218,7 +218,7 @@ public final class Remapper implements IRemapper {
         if (annotation.values != null) {
             int size = annotation.values.size();
             for (int i = 0; i < size; i++) {
-                @SuppressWarnings("unused") // We are using the cast as a kind of builtin automatic unit test
+                @SuppressWarnings("unused") // We are using the cast as a kind of built-in automatic unit test
                 String bitvoid = (String) annotation.values.get(i++);
                 remapAnnotationValue(annotation.values.get(i), i, annotation.values, sharedStringBuilder);
             }
@@ -583,7 +583,7 @@ public final class Remapper implements IRemapper {
      * @param oldName The old name of the method
      * @param newName The new name of the method
      * @see Type#getInternalName()
-     * @throws If a mapping error occurs.
+     * @throws ConflicitingMappingException If a mapping error occurs.
      */
     @Override
     public void remapMethod(String owner, String desc, String oldName, String newName) throws ConflicitingMappingException {

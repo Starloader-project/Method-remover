@@ -9,16 +9,14 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -243,10 +241,13 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                                 }
                                 if (bw != null) {
                                     try {
+                                        // Comment from Nov 21 2021:
+                                        // Yes, this sounds incredibly wrong (right now at least), but apparently is right.
+                                        // For whatever reason
                                         bw.write("FIELD\t");
                                         bw.write(node.name);
                                         bw.write('\t');
-                                        bw.write(expectedDesc);
+                                        bw.write(field.desc);
                                         bw.write('\t');
                                         bw.write(field.name);
                                         bw.write('\t');
@@ -396,10 +397,69 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         }
     }
 
-    /**
-     * @deprecated Method remapping is highly unstable and not really recommended. Method remapping internals might need an overhaul in the (near) future.
-     */
-    @Deprecated
+    private void computeFullHierarchy0(List<String> out, Map<String, List<String>> nearbyHierarchy, String current) {
+        out.add(current);
+        List<String> l = nearbyHierarchy.get(current);
+        if (l == null) {
+            return;
+        }
+        for (String subtype : l) {
+            computeFullHierarchy0(out, nearbyHierarchy, subtype);
+        }
+    }
+
+    protected Map<String, List<String>> computeFullHierarchy(Map<String, List<String>> nearbyHierarchy) {
+        Map<String, List<String>> allSubtypes = new HashMap<>();
+        for (Map.Entry<String, List<String>> clazz : nearbyHierarchy.entrySet()) {
+            String name = clazz.getKey();
+            List<String> subtypes = new ArrayList<>();
+            for (String subtype : clazz.getValue()) {
+                computeFullHierarchy0(subtypes, nearbyHierarchy, subtype);
+            }
+            allSubtypes.put(name, subtypes);
+        }
+        return allSubtypes;
+    }
+
+    private void propagateDownwards(Map<String, List<String>> directChildren, Collection<MethodReference> output,
+            ClassNode currentNode, MethodReference declaringRef, Map<String, ClassNode> name2Node, OverrideScope currentScope) {
+
+        if (currentScope == OverrideScope.NEVER) {
+            // This is futile
+            return;
+        }
+
+        List<String> children = directChildren.get(currentNode.name);
+        for (String childName : children) {
+            ClassNode childNode = name2Node.get(childName);
+            boolean canOverride = currentScope == OverrideScope.ALWAYS;
+            if (!canOverride) {
+                // scope is OverrideScope.PACKAGE
+                String superMethodPackage = declaringRef.getOwner().substring(0, declaringRef.getOwner().lastIndexOf('/'));
+                String overrdingMethodPackage = childName.substring(0, childName.lastIndexOf('/'));
+                if (superMethodPackage.equals(overrdingMethodPackage)) {
+                    canOverride = true;
+                }
+            }
+            // This also accounts for implicit inheritance
+            output.add(new MethodReference(childName, declaringRef.getDesc(), declaringRef.getName()));
+            boolean found = false;
+            for (MethodNode childMethod : childNode.methods) {
+                if (childMethod.name.equals(declaringRef.getName())
+                        && childMethod.desc.equals(declaringRef.getDesc())
+                        && (childMethod.access & Opcodes.ACC_STATIC) != 0) {
+                    found = true;
+                    int flagWithoutFinal = childMethod.access & ~Opcodes.ACC_FINAL; // Better be safe than sorry
+                    propagateDownwards(directChildren, output, childNode, declaringRef, name2Node, OverrideScope.fromFlags(flagWithoutFinal));
+                    break;
+                }
+            }
+            if (!found) {
+                propagateDownwards(directChildren, output, childNode, declaringRef, name2Node, currentScope);
+            }
+        }
+    }
+
     public void remapGetters() {
         BufferedWriter bw = null;
         if (map != null) {
@@ -412,17 +472,23 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             }
         }
 
-        // Order is very important here as the abort order must be deterministic
-        Map<FieldReference, Optional<MethodNode>> getters = new TreeMap<>(new AlphabeticFieldReferenceComparator());
-        HashMap<String, ClassNode> name2Node = new HashMap<>(nodes.size());
-        HashMap<String, List<String>> directSubtypes = new HashMap<>(nodes.size());
+        Map<String, ClassNode> name2Node = new HashMap<>(nodes.size());
+        List<Map.Entry<MethodReference, FieldReference>> getterCandidates = new ArrayList<>();
+        Map<String, List<String>> directSubtypes = new HashMap<>(nodes.size());
+        Map<String, List<MethodReference>> declaredMethods = new HashMap<>();
 
         for (ClassNode node : nodes) {
             name2Node.put(node.name, node);
-            if ((node.access & Opcodes.ACC_FINAL) == 0) {
+            if ((node.access & Opcodes.ACC_FINAL) != 0) {
+                directSubtypes.put(node.name, Collections.emptyList());
+            } else {
                 directSubtypes.put(node.name, new ArrayList<>());
             }
+            List<MethodReference> methods = new ArrayList<>();
+            declaredMethods.put(node.name, methods);
             for (MethodNode method : node.methods) {
+                MethodReference mref = new MethodReference(node.name, method);
+                methods.add(mref);
                 if (method.name.length() > 2) {
                     // unlikely to be obfuscated
                     continue;
@@ -433,6 +499,7 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                 }
                 AbstractInsnNode insn = method.instructions.getFirst();
                 if (insn == null) {
+                    // Abstract method? In any case it can never be a getter method
                     continue;
                 }
                 while ((insn instanceof FrameNode || insn instanceof LineNumberNode || insn instanceof LabelNode)) {
@@ -461,16 +528,14 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                         continue;
                     }
                     FieldReference fref = new FieldReference(getField);
-                    if (getters.containsKey(fref)) {
-                        getters.put(fref, Optional.empty());
-                    } else {
-                        getters.put(fref, Optional.of(method));
-                    }
+                    getterCandidates.add(Map.entry(mref, fref));
                 }
             }
         }
 
+        // Calculate nearby hierarchy
         for (ClassNode node : nodes) {
+            // As of now this has to be on another loop and cannot be merged easily into the loop above, albeit this is theoretically possible
             List<String> a = directSubtypes.get(node.superName);
             if (a != null) {
                 a.add(node.name);
@@ -483,87 +548,178 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             }
         }
 
-        // propagate changes through that hierarchy
-        Map<MethodNode, Set<String>> hierarchicalGetters = new LinkedHashMap<>(getters.size());
+        // Filter out conflicting proposals
+        Set<MethodReference> conflictingMappings = new HashSet<>();
+        Map<MethodReference, FieldReference> existingMappings = new HashMap<>();
+        for (Map.Entry<MethodReference, FieldReference> proposedMapping : getterCandidates) {
+            MethodReference mref = proposedMapping.getKey();
+            FieldReference fref = proposedMapping.getValue();
 
-        for (Map.Entry<FieldReference, Optional<MethodNode>> entry : getters.entrySet()) {
-            if (entry.getValue().isPresent()) {
-                MethodNode method = entry.getValue().get();
-                boolean isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
-                if (isStatic) {
-                    hierarchicalGetters.put(method, Set.of(entry.getKey().getOwner()));
-                    continue;
-                }
-                OverrideScope scope = OverrideScope.fromFlags(method.access);
-                FieldReference ref = entry.getKey();
-                ClassNode curr = name2Node.get(ref.getOwner());
-                String pkg = curr.name.substring(0, curr.name.lastIndexOf('/'));
+            if (conflictingMappings.contains(mref)) {
+                continue;
+            }
 
-                List<ClassNode> specifiers = getSpecifiyingClasses(method, curr, name2Node);
-                for (ClassNode node : specifiers) {
-                    propagateMethodRename(ref, method, name2Node, directSubtypes, node, hierarchicalGetters, scope, pkg);
-                }
+            FieldReference oldFieldReference = existingMappings.getOrDefault(existingMappings, fref);
+            if (!oldFieldReference.getName().equals(fref.getName())) {
+                existingMappings.remove(mref);
+                conflictingMappings.add(mref);
+            } else {
+                existingMappings.putIfAbsent(mref, oldFieldReference);
             }
         }
 
-        StringBuilder sharedBuilder = new StringBuilder();
-        for (Map.Entry<MethodNode, Set<String>> entry : hierarchicalGetters.entrySet()) {
-            MethodNode method = entry.getKey();
-            FieldInsnNode field = null;
-            AbstractInsnNode insn = method.instructions.getFirst();
-            while (insn != null) {
-                if (insn instanceof FieldInsnNode) {
-                    field = (FieldInsnNode) insn;
-                    break;
-                }
-                insn = insn.getNext();
+        // calculate the full hierarchy based on the nearby hierarchy
+        Map<String, List<String>> allSubtypes = computeFullHierarchy(directSubtypes); // super -> children map
+        Map<String, List<String>> allSupertypes = invertHierarchy(allSubtypes); // child -> super
+
+        // Based on the hierarchy and the declared method's access flags, we can try to identify the methods that are the same.
+        // In our case, we will call these connected methods a "method group".
+        Map<MethodReference, Set<MethodReference>> methodGroups = new HashMap<>();
+
+        declaredMethods.forEach((declarerName, declaredMethodRefs) -> {
+            ClassNode declarerNode = name2Node.get(declarerName);
+
+            List<String> supers = allSupertypes.get(declarerName);
+            if (supers == null) {
+                // This can likely happen if a class is a superclass of a class that does not exit or is java-specific. However given the circumstances it shouldn't be too much of an issue (heh)
+                // System.err.println(declarerName + " extends " + declarerNode.superName + " and implements " + Arrays.toString(declarerNode.interfaces.toArray()));
+                supers = Collections.emptyList();
             }
-            if (field == null) {
-                throw new NullPointerException();
-            }
-            sharedBuilder.setLength(0);
-            if (field.name.length() > 2) {
-                sharedBuilder.append("get");
-                sharedBuilder.appendCodePoint(Character.toUpperCase(field.name.codePointAt(0)));
-                sharedBuilder.append(field.name.substring(1));
-            } else {
-                sharedBuilder.append("get_");
-                sharedBuilder.append(field.name);
-            }
-            String newName = sharedBuilder.toString();
-            // WARNING: abort order must be deterministic
-            boolean aborted = false;
-            ArrayList<String> successfullClasses = new ArrayList<>();
-            for (String clazz : entry.getValue()) {
-                try {
-                    remapper.remapMethod(clazz, method.desc, method.name, newName);
-                    successfullClasses.add(clazz);
-                } catch (ConflicitingMappingException e) {
-                    aborted = true;
-                    break;
+            List<ClassNode> superNodes = new ArrayList<>();
+            supers.forEach(name -> superNodes.add(name2Node.get(name)));
+            List<MethodNode> declaredMethodNodes = new ArrayList<>(); // This is required in order to obtain the access flags of the method
+            for (MethodReference mref : declaredMethodRefs) {
+                for (MethodNode method : declarerNode.methods) {
+                    if (method.name.equals(mref.getName()) && method.desc.equals(mref.getDesc())) {
+                        declaredMethodNodes.add(method);
+                        break;
+                    }
                 }
             }
-            if (aborted) {
-                successfullClasses.forEach(str -> {
-                    remapper.removeMethodRemap(str, method.desc, method.name);
-                });
-            } else {
-                for (String clazz : entry.getValue()) {
-                    if (bw != null) {
-                        try {
-                            bw.write("METHOD\t");
-                            bw.write(clazz);
-                            bw.write('\t');
-                            bw.write(method.desc);
-                            bw.write('\t');
-                            bw.write(method.name);
-                            bw.write('\t');
-                            bw.write(newName);
-                            bw.write('\n');
-                        } catch (IOException e) {
-                            e.printStackTrace();
+
+            declaredMethodNodes.removeIf(method -> {
+                boolean isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
+                if (isStatic) {
+                    MethodReference ref = new MethodReference(declarerName, method);
+                    methodGroups.put(ref, Collections.singleton(ref)); // A static method is more or less a standalone method
+                    return true; // as such they are not relevant after that and are removed from the methodNodes list.
+                } else {
+                    return false;
+                }
+            });
+
+            for (MethodNode method : declaredMethodNodes) {
+                Set<MethodReference> group = new HashSet<>();
+                MethodReference declaredMethodRef = new MethodReference(declarerName, method);
+                methodGroups.put(declaredMethodRef, group);
+                group.add(declaredMethodRef);
+                for (ClassNode node : superNodes) {
+                    for (MethodNode superMethod : node.methods) {
+                        if (method.name.equals(superMethod.name)
+                                && method.desc.equals(superMethod.desc)
+                                && (superMethod.access & Opcodes.ACC_STATIC) == 0) {
+                            // Check whether 'method' can possibly override 'superMethod'
+                            OverrideScope superMethodScope = OverrideScope.fromFlags(superMethod.access);
+                            if (superMethodScope == OverrideScope.ALWAYS) {
+                                group.add(new MethodReference(node.name, superMethod));
+                                propagateDownwards(directSubtypes, group, node, declaredMethodRef, name2Node, superMethodScope);
+                            } else if (superMethodScope == OverrideScope.PACKAGE) {
+                                String superMethodPackage = node.name.substring(0, node.name.lastIndexOf('/'));
+                                String overrdingMethodPackage = declarerName.substring(0, declarerName.lastIndexOf('/'));
+                                if (superMethodPackage.equals(overrdingMethodPackage)) {
+                                    group.add(new MethodReference(node.name, superMethod));
+                                }
+                                // TODO this is terribly inefficient as we are propagating the same set of classes multiple times.
+                                // A solution to this issue would be to have a stop condition of some sorts, either when the reference
+                                // was already added or when the same class is scanned twice
+                                // however it is also required as we have implicit inheritance, so a removal is not the solution
+                                propagateDownwards(directSubtypes, group, node, declaredMethodRef, name2Node, superMethodScope);
+                            } else {
+                                // private (or final) method. Not it
+                            }
+                            break; // We found our method declaration - or at least think we have
                         }
                     }
+                }
+                propagateDownwards(directSubtypes, group, declarerNode, declaredMethodRef, name2Node, OverrideScope.fromFlags(method.access));
+            }
+        });
+
+        // Filter out conflicts within the group
+        // Also filter out conflicts which occur due to the method name being already present in the class.
+        StringBuilder sharedBuilder = new StringBuilder();
+        Map<MethodReference, String> proposedNames = new HashMap<>();
+        existingMappings.forEach((mref, fref) -> {
+            sharedBuilder.setLength(0);
+            if (fref.getName().length() > 2) {
+                sharedBuilder.append("get");
+                sharedBuilder.appendCodePoint(Character.toUpperCase(fref.getName().codePointAt(0)));
+                sharedBuilder.append(fref.getName().substring(1));
+            } else {
+                sharedBuilder.append("get_");
+                sharedBuilder.append(fref.getName());
+            }
+            String newName = sharedBuilder.toString();
+            Set<MethodReference> group = methodGroups.get(mref);
+            boolean invalid = false;
+            for (MethodReference groupRef : group) {
+                if (conflictingMappings.contains(groupRef)) {
+                    invalid = true;
+                    break;
+                }
+                if (!proposedNames.getOrDefault(groupRef, newName).equals(newName)) {
+                    invalid = true;
+                    // What to do with the old mapping? (especially those that are connected to this one)
+                    break;
+                }
+                ClassNode node = name2Node.get(groupRef.getOwner());
+                for (MethodNode method : node.methods) {
+                    if (method.name.equals(newName) && method.desc.startsWith("()")) {
+                        invalid = true; // Method name already present. (Could we use another name?)
+                        break;
+                    }
+                }
+                if (invalid) {
+                    break;
+                }
+            }
+            if (invalid) {
+                for (MethodReference groupRef : group) {
+                    conflictingMappings.add(groupRef);
+                    proposedNames.remove(groupRef);
+                }
+            } else {
+                for (MethodReference groupRef : group) {
+                    proposedNames.put(groupRef, newName);
+                }
+            }
+        });
+
+        // FIXME filter out conflicts where two different groups are renamed to the same method name.
+        // This is especially an issue with synthetic methods
+
+        for (Map.Entry<MethodReference, String> entry : proposedNames.entrySet()) {
+            MethodReference method = entry.getKey();
+            String newName = entry.getValue();
+
+            try {
+                remapper.remapMethod(method.getOwner(), method.getDesc(), method.getName(), newName);
+            } catch (ConflicitingMappingException e1) {
+                throw new IllegalStateException("Conflict filtering was not done throughout enough.", e1);
+            }
+            if (bw != null) {
+                try {
+                    bw.write("METHOD\t");
+                    bw.write(method.getOwner());
+                    bw.write('\t');
+                    bw.write(method.getName());
+                    bw.write('\t');
+                    bw.write(method.getDesc());
+                    bw.write('\t');
+                    bw.write(newName);
+                    bw.write('\n');
+                } catch (IOException e) {
+                    e.printStackTrace();
                 }
             }
         }
@@ -578,116 +734,19 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         }
     }
 
-    private static void collectParents(ClassNode node, Map<String, ClassNode> lookup, Set<ClassNode> out, boolean interfacesOnly) {
-        if ((node.access & Opcodes.ACC_INTERFACE) == 0) {
-            ClassNode superClass = lookup.get(node.superName);
-            if (superClass != null) {
-                if (!interfacesOnly) {
-                    out.add(superClass);
+    private Map<String, List<String>> invertHierarchy(Map<String, List<String>> allSubtypes) {
+        Map<String, List<String>> allSupertypes = new HashMap<>();
+        allSubtypes.forEach((superType, inSubtypes) -> {
+            for (String subtype : inSubtypes) {
+                List<String> outSupertypes = allSupertypes.get(subtype);
+                if (outSupertypes == null) {
+                    outSupertypes = new ArrayList<>();
+                    allSupertypes.put(subtype, outSupertypes);
                 }
-                collectParents(superClass, lookup, out, interfacesOnly);
+                outSupertypes.add(superType);
             }
-        }
-        for (String itf : node.interfaces) {
-            ClassNode interfaceNode = lookup.get(itf);
-            if (interfaceNode != null) {
-                out.add(interfaceNode);
-                collectParents(interfaceNode, lookup, out, interfacesOnly);
-            }
-        }
-    }
-
-    private static List<ClassNode> getSpecifiyingClasses(MethodNode implMethod, ClassNode implClass, Map<String, ClassNode> nodeLookup) {
-        Set<ClassNode> nodes = new LinkedHashSet<>();
-        collectParents(implClass, nodeLookup, nodes, false);
-        List<ClassNode> returnedNodes = new ArrayList<>();
-        boolean isStatic = (implMethod.access & Opcodes.ACC_STATIC) != 0;
-        String scopePackage = implClass.name.substring(0, implClass.name.lastIndexOf('/'));
-        for (ClassNode node : nodes) {
-            Optional<MethodNode> optMethod = getMethod(node, implMethod.name, implMethod.desc, isStatic);
-            if (optMethod.isPresent()) {
-                MethodNode method = optMethod.get();
-                OverrideScope scope = OverrideScope.fromFlags(method.access);
-                if (scope == OverrideScope.NEVER) {
-                    continue;
-                } else if (scope == OverrideScope.PACKAGE) {
-                    if (!scopePackage.equals(node.name.substring(0, node.name.lastIndexOf('/')))) {
-                        continue;
-                    }
-                }
-                returnedNodes.add(node);
-            }
-        }
-        returnedNodes.add(implClass);
-        return returnedNodes;
-    }
-
-    private static Optional<MethodNode> getMethod(ClassNode node, String name, String desc, boolean isStatic) {
-        for (MethodNode method : node.methods) {
-            if (method.name.equals(name) && method.desc.equals(desc)) {
-                if (isStatic) {
-                    if ((method.access & Opcodes.ACC_STATIC) == 0) {
-                        continue;
-                    }
-                } else {
-                    if ((method.access & Opcodes.ACC_STATIC) != 0) {
-                        continue;
-                    }
-                }
-                return Optional.of(method);
-            }
-        }
-        return Optional.empty();
-    }
-
-    private static void propagateMethodRename(FieldReference ref, MethodNode propagatingMethod, Map<String, ClassNode> lookup, Map<String, List<String>> directSubtypes, ClassNode currentNode, Map<MethodNode, Set<String>> hierarchicalGetters, OverrideScope access, String scopePackage) {
-        if (OverrideScope.fromFlags(propagatingMethod.access) == OverrideScope.NEVER) {
-            Set<String> a = hierarchicalGetters.get(propagatingMethod);
-            if (a == null) {
-                a = new LinkedHashSet<>();
-                hierarchicalGetters.put(propagatingMethod, a);
-            }
-            a.add(currentNode.name);
-            return;
-        }
-        OverrideScope scope = access;
-        Optional<MethodNode> currentMethod = getMethod(currentNode, propagatingMethod.name, propagatingMethod.desc, false);
-
-        // Javac will still reference a method on a class even if the method is not declared in a class
-        // e.g. for an implementation of the class "Object" javac will still reference it's #equals() method
-        // even if it is not overridden there
-        Set<String> a = hierarchicalGetters.get(propagatingMethod);
-        if (a == null) {
-            a = new LinkedHashSet<>();
-            hierarchicalGetters.put(propagatingMethod, a);
-        }
-        a.add(currentNode.name);
-        if (currentMethod.isPresent()) {
-            scope = OverrideScope.fromFlags(currentMethod.get().access);
-            if (scope == OverrideScope.ALWAYS) {
-                scopePackage = null;
-            }
-        }
-
-        List<String> subtypes = directSubtypes.get(currentNode.name);
-        if (subtypes != null) {
-            for (String implementingClass : subtypes) {
-                ClassNode implementation = lookup.get(implementingClass);
-                if (implementation != null) {
-                    if (scope == OverrideScope.PACKAGE) {
-                        int lastSlash = implementingClass.lastIndexOf('/');
-                        String implementingPackage = implementingClass.substring(0, lastSlash);
-                        if (!implementingPackage.equals(scopePackage)) {
-                            continue;
-                        }
-                    }
-                    if (implementingClass.equals(currentNode.name)) {
-                        throw new IllegalStateException("StackOverflowError inbound. Class: " + implementingClass);
-                    }
-                    propagateMethodRename(ref, propagatingMethod, lookup, directSubtypes, implementation, hierarchicalGetters, scope, scopePackage);
-                }
-            }
-        }
+        });
+        return allSupertypes;
     }
 
     private void remapSet(Map<String, TreeSet<ClassNode>> set, BufferedWriter writer, String prefix) {
