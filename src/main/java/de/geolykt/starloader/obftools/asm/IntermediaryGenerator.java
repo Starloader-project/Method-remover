@@ -645,6 +645,45 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             }
         });
 
+        // prevent renaming two methods to the same name
+        Map<FieldReference, MethodReference> refeers = new HashMap<>();
+        existingMappings.forEach((mref, fref)-> {
+            MethodReference oldReference = refeers.put(fref, mref);
+            if (oldReference != null && !oldReference.equals(mref)) {
+                if (oldReference.getOwner().equals(mref.getOwner()) && fref.getOwner().equals(oldReference.getOwner())) {
+                    // One of the two methods is likely a synthetic method. We will try to only invalidate that synthetic method
+                    ClassNode node = name2Node.get(oldReference.getOwner());
+                    boolean oldRefSynthetic = false;
+                    boolean newRefSynthetic = false;
+                    for (MethodNode method : node.methods) {
+                        if (method.name.equals(oldReference.getName()) && (method.desc.equals(oldReference.getDesc()))) {
+                            oldRefSynthetic = (method.access & Opcodes.ACC_SYNTHETIC) != 0;
+                        }
+                        if (method.name.equals(mref.getName()) && (method.desc.equals(mref.getDesc()))) {
+                            newRefSynthetic = (method.access & Opcodes.ACC_SYNTHETIC) != 0;
+                        }
+                    }
+                    if (oldRefSynthetic == newRefSynthetic) {
+                        // Either both are synthetic or both are not synthetic. A preference thus cannot be established
+                        conflictingMappings.add(mref);
+                        conflictingMappings.add(oldReference);
+                    } else if (oldRefSynthetic) {
+                        // old reference was synthetic, but the new one is not
+                        conflictingMappings.add(oldReference);
+                    } else {
+                        // new reference is synthetic, but the old one was not
+                        refeers.put(fref, oldReference);
+                        conflictingMappings.add(mref);
+                    }
+                } else {
+                    // While we could only rename one method, due to the way HashMap ordering works, this is not easily doable
+                    // while keeping a predictable output.
+                    conflictingMappings.add(mref);
+                    conflictingMappings.add(oldReference);
+                }
+            }
+        });
+
         // Filter out conflicts within the group
         // Also filter out conflicts which occur due to the method name being already present in the class.
         StringBuilder sharedBuilder = new StringBuilder();
@@ -694,9 +733,6 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                 }
             }
         });
-
-        // FIXME filter out conflicts where two different groups are renamed to the same method name.
-        // This is especially an issue with synthetic methods
 
         for (Map.Entry<MethodReference, String> entry : proposedNames.entrySet()) {
             MethodReference method = entry.getKey();
