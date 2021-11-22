@@ -293,6 +293,8 @@ public final class Remapper {
             if (modified) {
                 bsmArgs[index] = new Handle(handle.getTag(), hOwner, newName, desc, handle.isInterface());
             }
+        } else  if (bsmArg instanceof String && bsmArgs.length == 1) {
+            // Do nothing. I'm kind of surprised that I built this method modular enough that this was a straightforward fix
         } else {
             throw new IllegalArgumentException("Unexpected bsm arg class at index " + index + " for " + Arrays.toString(bsmArgs) + ". Class is " + bsmArg.getClass().getName());
         }
