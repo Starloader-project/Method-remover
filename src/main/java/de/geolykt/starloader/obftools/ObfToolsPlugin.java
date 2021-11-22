@@ -41,9 +41,6 @@ public class ObfToolsPlugin implements Plugin<Project> {
         PostprocessTask transformerTask = gradleProject.getTasks().create("postprocess", PostprocessTask.class, extension);
 
         gradleProject.afterEvaluate(project -> {
-            if (extension.accessWidener != null) {
-                doAW(extension, gradleProject);
-            }
             Task jarTask = project.getTasks().getByName("jar");
             transformerTask.dependsOn(jarTask);
             if (extension.affectedJar != null) {
@@ -81,6 +78,9 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     e.printStackTrace();
                 }
             }
+            if (extension.accessWidener != null) {
+                doAW(extension, gradleProject);
+            }
         });
     }
 
@@ -91,10 +91,7 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     + accessWidenerFile.getAbsolutePath());
         }
 
-        File affectedFile = project.file(extension.affectedJar);
-        if (!affectedFile.exists()) {
-            throw new RuntimeException("Affected file was not found: " + affectedFile.getAbsolutePath());
-        }
+        File affectedFile = project.file(INTERMEDIARY_JAR);
 
         AccessWidener accessWidener = new AccessWidener();
         AccessWidenerReader accessWidenerReader = new AccessWidenerReader(accessWidener);
