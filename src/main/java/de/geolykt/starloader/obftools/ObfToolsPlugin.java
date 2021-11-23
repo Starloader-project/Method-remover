@@ -1,30 +1,22 @@
 package de.geolykt.starloader.obftools;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.jar.JarFile;
-import java.util.zip.ZipEntry;
 
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
-import org.objectweb.asm.ClassReader;
-import org.objectweb.asm.ClassVisitor;
-import org.objectweb.asm.ClassWriter;
-import org.objectweb.asm.Opcodes;
-import org.zeroturnaround.zip.ZipUtil;
-import org.zeroturnaround.zip.transform.ByteArrayZipEntryTransformer;
-import org.zeroturnaround.zip.transform.ZipEntryTransformer;
-import org.zeroturnaround.zip.transform.ZipEntryTransformerEntry;
+import org.objectweb.asm.tree.ClassNode;
 
 import de.geolykt.starloader.obftools.asm.IntermediaryGenerator;
 import de.geolykt.starloader.obftools.asm.Oaktree;
-
-import net.fabricmc.accesswidener.AccessWidener;
-import net.fabricmc.accesswidener.AccessWidenerReader;
-import net.fabricmc.accesswidener.AccessWidenerVisitor;
+import de.geolykt.starloader.obftools.asm.access.AccessTransformInfo;
+import de.geolykt.starloader.obftools.asm.access.AccessWidenerReader;
 
 public class ObfToolsPlugin implements Plugin<Project> {
 
@@ -68,59 +60,42 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.fixForeachOnArray(true);
                     deobfuscator.fixComparators(true, true);
 
-                    IntermediaryGenerator generator = new IntermediaryGenerator(map, intermediaryJar, deobfuscator.getClassNodesDirectly());
+                    IntermediaryGenerator generator = new IntermediaryGenerator(map, null, deobfuscator.getClassNodesDirectly());
                     generator.addResources(f);
                     generator.remapClassesV2();
                     generator.doProposeEnumFieldsV2();
                     generator.remapGetters();
                     generator.deobfuscate();
+
+                    if (extension.accessWidener != null) {
+                        File accessWidenerFile = project.file(extension.accessWidener);
+                        if (!accessWidenerFile.exists()) {
+                            throw new RuntimeException("Could not find the specified access widener file which should be at "
+                                    + accessWidenerFile.getAbsolutePath());
+                        }
+                        AccessTransformInfo atInfo = new AccessTransformInfo();
+
+                        try (FileInputStream fis = new FileInputStream(accessWidenerFile)) {
+                            try (AccessWidenerReader awr = new AccessWidenerReader(atInfo, fis)) {
+                                awr.readHeader();
+                                while (awr.readLn());
+                            }
+                        }
+
+                        Map<String, ClassNode> classNodes = new HashMap<>();
+                        for (ClassNode node : deobfuscator.getClassNodesDirectly()) {
+                            classNodes.put(node.name, node);
+                        }
+                        atInfo.apply(classNodes, System.err::println);
+                    }
+
+                    try (FileOutputStream fos = new FileOutputStream(intermediaryJar)) {
+                        deobfuscator.write(fos);
+                    }
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    throw new IllegalStateException(e);
                 }
             }
-            if (extension.accessWidener != null) {
-                doAW(extension, gradleProject);
-            }
         });
-    }
-
-    public void doAW(ObftoolsExtension extension, Project project) {
-        File accessWidenerFile = project.file(extension.accessWidener);
-        if (!accessWidenerFile.exists()) {
-            throw new RuntimeException("Could not find the specified access widener file which should be at "
-                    + accessWidenerFile.getAbsolutePath());
-        }
-
-        File affectedFile = project.file(INTERMEDIARY_JAR);
-
-        AccessWidener accessWidener = new AccessWidener();
-        AccessWidenerReader accessWidenerReader = new AccessWidenerReader(accessWidener);
-
-        try (BufferedReader reader = new BufferedReader(new FileReader(accessWidenerFile))) {
-            accessWidenerReader.read(reader);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to read project access widener file");
-        }
-        if (accessWidener.getTargets().isEmpty()) {
-            return;
-        }
-        ZipEntryTransformerEntry[] transformers = accessWidener.getTargets().stream()
-                .map(string -> new ZipEntryTransformerEntry(string.replaceAll("\\.", "/") + ".class", getTransformer(accessWidener)))
-                .toArray(ZipEntryTransformerEntry[]::new);
-        ZipUtil.transformEntries(affectedFile, transformers);
-    }
-
-    private ZipEntryTransformer getTransformer(AccessWidener accessWidener) {
-        return new ByteArrayZipEntryTransformer() {
-            @Override
-            protected byte[] transform(ZipEntry zipEntry, byte[] input) {
-                ClassReader reader = new ClassReader(input);
-                ClassWriter writer = new ClassWriter(0);
-                ClassVisitor classVisitor = AccessWidenerVisitor.createClassVisitor(Opcodes.ASM9, writer,
-                        accessWidener);
-                reader.accept(classVisitor, 0);
-                return writer.toByteArray();
-            }
-        };
     }
 }

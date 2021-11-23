@@ -23,11 +23,9 @@ repositories {
 
 dependencies {
     implementation gradleApi()
-    implementation "org.zeroturnaround:zt-zip:1.14" // TODO update if needed
     implementation "org.ow2.asm:asm:9.2"
     implementation "org.ow2.asm:asm-tree:9.2"
     implementation "org.ow2.asm:asm-commons:9.2"
-    implementation "de.geolykt.starloader:access-widener:2.0.0" // Access widening technologies
 
     // https://mvnrepository.com/artifact/org.jetbrains/annotations
     implementation group: 'org.jetbrains', name: 'annotations', version: '23.0.0'

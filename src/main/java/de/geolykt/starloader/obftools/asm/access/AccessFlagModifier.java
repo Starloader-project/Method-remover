@@ -1,0 +1,109 @@
+package de.geolykt.starloader.obftools.asm.access;
+
+import java.util.Optional;
+
+import org.objectweb.asm.Opcodes;
+
+public abstract class AccessFlagModifier {
+
+    public static enum Type {
+        CLASS,
+        METHOD,
+        FIELD;
+    }
+
+    public final Type type;
+    public final String clazz;
+    public final Optional<String> name;
+    public final Optional<String> descriptor;
+
+    public AccessFlagModifier(Type type, String clazz, Optional<String> name, Optional<String> descriptor) {
+        this.type = type;
+        this.clazz = clazz;
+        this.name = name;
+        this.descriptor = descriptor;
+        if (type == Type.CLASS) {
+            if (name.isPresent() || descriptor.isPresent()) {
+                throw new IllegalArgumentException("Neither name nor descriptor may be present for the CLASS type.");
+            }
+        } else if (name.isEmpty() || descriptor.isEmpty()) {
+            throw new IllegalArgumentException("Both name and descriptor must be present for anything but the CLASS type.");
+        }
+    }
+
+    public abstract int apply(int oldAccessFlag);
+    public abstract String toAccessWidenerString();
+
+    public static class AccessibleModifier extends AccessFlagModifier {
+
+        public AccessibleModifier(Type type, String clazz, Optional<String> name, Optional<String> descriptor) {
+            super(type, clazz, name, descriptor);
+        }
+
+        @Override
+        public int apply(int oldAccessFlag) {
+            return oldAccessFlag & ~Opcodes.ACC_PRIVATE & ~Opcodes.ACC_PROTECTED | Opcodes.ACC_PUBLIC;
+        }
+
+        @Override
+        public String toAccessWidenerString() {
+            if (type == Type.CLASS) {
+                return "accesible CLASS " + clazz;
+            } else {
+                return String.format("accessible %s %s %s %s", type.toString(), clazz, name.get(), descriptor.get());
+            }
+        }
+    }
+
+    public static class ExtendableModifier extends AccessFlagModifier {
+
+        public ExtendableModifier(Type type, String clazz, Optional<String> name, Optional<String> descriptor) {
+            super(type, clazz, name, descriptor);
+        }
+
+        @Override
+        public int apply(int oldAccessFlag) {
+            int flag = oldAccessFlag & ~Opcodes.ACC_PRIVATE & ~Opcodes.ACC_FINAL;
+            if ((flag & Opcodes.ACC_PUBLIC) == 0) {
+                return flag | Opcodes.ACC_PROTECTED;
+            } else {
+                return flag;
+            }
+        }
+
+        @Override
+        public String toAccessWidenerString() {
+            if (type == Type.CLASS) {
+                return "extendable CLASS " + clazz;
+            } else {
+                return String.format("extendable %s %s %s %s", type.toString(), clazz, name.get(), descriptor.get());
+            }
+        }
+    }
+
+    public static class RemoveFlagModifier extends AccessFlagModifier {
+
+        private final int flag;
+        private final String awMode;
+
+        public RemoveFlagModifier(Type type, String clazz, Optional<String> name, Optional<String> descriptor, int flag, String awMode) {
+            super(type, clazz, name, descriptor);
+            this.flag = flag;
+            this.awMode = awMode;
+        }
+
+        @Override
+        public int apply(int oldAccessFlag) {
+            return oldAccessFlag & ~flag;
+        }
+
+        @Override
+        public String toAccessWidenerString() {
+            if (type == Type.CLASS) {
+                return awMode + " CLASS " + clazz;
+            } else {
+                return String.format("%s %s %s %s %s", awMode, type.toString(), clazz, name.get(), descriptor.get());
+            }
+        }
+    }
+}
