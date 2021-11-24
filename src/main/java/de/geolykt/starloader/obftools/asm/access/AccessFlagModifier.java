@@ -1,5 +1,6 @@
 package de.geolykt.starloader.obftools.asm.access;
 
+import java.util.Locale;
 import java.util.Optional;
 
 import org.objectweb.asm.Opcodes;
@@ -10,6 +11,11 @@ public abstract class AccessFlagModifier {
         CLASS,
         METHOD,
         FIELD;
+
+        @Override
+        public String toString() {
+            return name().toLowerCase(Locale.ROOT);
+        }
     }
 
     public final Type type;
@@ -48,7 +54,7 @@ public abstract class AccessFlagModifier {
         @Override
         public String toAccessWidenerString() {
             if (type == Type.CLASS) {
-                return "accesible CLASS " + clazz;
+                return "accessible class " + clazz;
             } else {
                 return String.format("accessible %s %s %s %s", type.toString(), clazz, name.get(), descriptor.get());
             }
@@ -74,7 +80,7 @@ public abstract class AccessFlagModifier {
         @Override
         public String toAccessWidenerString() {
             if (type == Type.CLASS) {
-                return "extendable CLASS " + clazz;
+                return "extendable class " + clazz;
             } else {
                 return String.format("extendable %s %s %s %s", type.toString(), clazz, name.get(), descriptor.get());
             }
@@ -100,7 +106,7 @@ public abstract class AccessFlagModifier {
         @Override
         public String toAccessWidenerString() {
             if (type == Type.CLASS) {
-                return awMode + " CLASS " + clazz;
+                return awMode + " class " + clazz;
             } else {
                 return String.format("%s %s %s %s %s", awMode, type.toString(), clazz, name.get(), descriptor.get());
             }
