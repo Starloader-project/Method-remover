@@ -1,5 +1,6 @@
 package de.geolykt.starloader.obftools;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -63,6 +64,13 @@ public class PostprocessTask extends Jar {
         List<ClassNode> nodes = new ArrayList<>();
         List<Map.Entry<String, byte[]>> resources = new ArrayList<>();
         Remapper remapper = new Remapper();
+
+        try {
+            RemapperUtils.readReversedTinyV1File(mapLocation, remapper);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
         try {
             JarFile inJar = new JarFile(src);
             Enumeration<JarEntry> entries = inJar.entries();
@@ -71,7 +79,13 @@ public class PostprocessTask extends Jar {
                 JarEntry entry = entries.nextElement();
                 InputStream is = inJar.getInputStream(entry);
                 if (!entry.getName().endsWith(".class")) {
-                    resources.add(Map.entry(entry.getName(), is.readAllBytes()));
+                    if (entry.getName().endsWith(".accesswidener")) {
+                        ByteArrayOutputStream remappedStream = new ByteArrayOutputStream();
+                        remapper.remapAccesswidener(is, remappedStream);
+                        resources.add(Map.entry(entry.getName(), remappedStream.toByteArray()));
+                    } else {
+                        resources.add(Map.entry(entry.getName(), is.readAllBytes()));
+                    }
                     is.close();
                     continue;
                 }
@@ -91,12 +105,7 @@ public class PostprocessTask extends Jar {
             throw new RuntimeException(e);
         }
 
-        try {
-            RemapperUtils.readReversedTinyV1File(mapLocation, remapper);
-            remapper.process();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        remapper.process();
 
         try (JarOutputStream jarOut = new JarOutputStream(new FileOutputStream(targetFinal))) {
             for (ClassNode node : nodes) {

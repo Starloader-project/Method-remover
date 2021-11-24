@@ -1,15 +1,25 @@
 package de.geolykt.starloader.obftools.asm.remapper;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.objectweb.asm.Handle;
+import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
@@ -29,6 +39,8 @@ import org.objectweb.asm.tree.MultiANewArrayInsnNode;
 import org.objectweb.asm.tree.RecordComponentNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.TypeInsnNode;
+
+import de.geolykt.starloader.obftools.asm.access.AccessFlagModifier;
 
 /**
  * Simple in-memory remapping engine. Unlike many other remappers it is able to take in already parsed
@@ -206,6 +218,95 @@ public final class Remapper {
             nameToNode.put(node.name, node);
         }
         oldToNewClassName.clear();
+    }
+
+    public void remapAccesswidener(InputStream input, OutputStream output) throws IOException {
+        BufferedReader br = new BufferedReader(new InputStreamReader(input));
+        BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(output));
+        StringBuilder sb = new StringBuilder();
+        while (true) {
+
+            String ln = br.readLine();
+            if (ln == null) {
+                break;
+            }
+            int indexOfCommentSymbol = ln.indexOf('#');
+            String pureLine = indexOfCommentSymbol == -1 ? ln : ln.substring(0, indexOfCommentSymbol);
+            if (pureLine.isBlank() || pureLine.toLowerCase(Locale.ROOT).startsWith("accesswidener")) {
+                bw.write(ln);
+                bw.newLine();
+                continue;
+            }
+            String[] blocks = pureLine.trim().split("\\s+");
+            if (blocks.length != 3 && blocks.length != 5) {
+                throw new IOException("Illegal block count. Got " + blocks.length + " expected 3 or 5. Line: " + pureLine);
+            }
+
+            String targetClass = blocks[2].replace('.', '/');
+            String operation = blocks[0];
+            String typeName = blocks[1];
+
+            Optional<String> name;
+            Optional<String> desc;
+            AccessFlagModifier.Type memberType = null;
+            switch (typeName.toLowerCase(Locale.ROOT)) {
+            case "class":
+                if (blocks.length != 3) {
+                    throw new IOException("Illegal block count. Got " + blocks.length
+                            + " but expected 3 due to the CLASS modifier. Line: " + pureLine);
+                }
+                memberType = AccessFlagModifier.Type.CLASS;
+                name = Optional.empty();
+                desc = Optional.empty();
+                break;
+            case "field":
+                memberType = AccessFlagModifier.Type.FIELD;
+                // Fall-through intended
+            case "method":
+                if (memberType == null) {
+                    memberType = AccessFlagModifier.Type.METHOD;
+                }
+                if (blocks.length != 5) {
+                    throw new IOException("Illegal block count. Got " + blocks.length
+                            + " but expected 5 due to the METHOD or FIELD modifier. Line: " + pureLine);
+                }
+                name = Optional.of(methodRenames.optGet(targetClass, blocks[3], blocks[3]));
+                sb.setLength(0);
+                remapSignature(blocks[4], sb);
+                desc = Optional.of(blocks[4]);
+                break;
+            default:
+                throw new IOException();
+            }
+            targetClass = oldToNewClassName.getOrDefault(targetClass, targetClass);
+
+            AccessFlagModifier modifier;
+
+            switch (operation.toLowerCase(Locale.ROOT)) {
+            case "accessible":
+                modifier = new AccessFlagModifier.AccessibleModifier(memberType, targetClass, name, desc);
+                break;
+            case "extendable":
+                modifier = new AccessFlagModifier.ExtendableModifier(memberType, targetClass, name, desc);
+                break;
+            case "mutable":
+                modifier = new AccessFlagModifier.RemoveFlagModifier(memberType, targetClass, name, desc, Opcodes.ACC_FINAL, "mutable");
+                break;
+            case "natural":
+                modifier = new AccessFlagModifier.RemoveFlagModifier(memberType, targetClass, name, desc, Opcodes.ACC_SYNTHETIC, "natural");
+                break;
+            case "denumerised":
+                modifier = new AccessFlagModifier.RemoveFlagModifier(memberType, targetClass, name, desc, Opcodes.ACC_ENUM, "denumerised");
+                break;
+            default:
+                throw new UnsupportedOperationException("Unknown mode: " + operation);
+            }
+
+            bw.write(modifier.toAccessWidenerString());
+            bw.newLine();
+        }
+        br.close();
+        bw.close();
     }
 
     private void remapAnnotation(AnnotationNode annotation, StringBuilder sharedStringBuilder) {
