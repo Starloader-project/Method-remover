@@ -273,7 +273,7 @@ public final class Remapper {
                 name = Optional.of(methodRenames.optGet(targetClass, blocks[3], blocks[3]));
                 sb.setLength(0);
                 remapSignature(blocks[4], sb);
-                desc = Optional.of(blocks[4]);
+                desc = Optional.of(sb.toString());
                 break;
             default:
                 throw new IOException();
