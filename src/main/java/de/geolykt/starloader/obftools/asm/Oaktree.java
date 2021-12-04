@@ -146,6 +146,7 @@ public class Oaktree {
                 // remapper activate!
                 IntermediaryGenerator gen = new IntermediaryGenerator(new File("map.tiny"), new File(args[1]), oakTree.nodes);
                 gen.addResources(new File(args[0]));
+                gen.useAlternateClassNaming(false);
                 gen.remapClassesV2();
                 gen.doProposeEnumFieldsV2();
                 long startGetters = System.currentTimeMillis();

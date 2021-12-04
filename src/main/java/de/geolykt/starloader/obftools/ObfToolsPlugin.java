@@ -61,6 +61,7 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.fixComparators(true, true);
 
                     IntermediaryGenerator generator = new IntermediaryGenerator(map, null, deobfuscator.getClassNodesDirectly());
+                    generator.useAlternateClassNaming(extension.alternateNaming != null && extension.alternateNaming == true);
                     generator.addResources(f);
                     generator.remapClassesV2();
                     generator.doProposeEnumFieldsV2();

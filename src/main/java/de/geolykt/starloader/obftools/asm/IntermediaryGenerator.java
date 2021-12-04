@@ -61,10 +61,11 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
     }
 } public class IntermediaryGenerator {
 
+    private boolean alternateClassNaming;
     private final File map;
     private final List<ClassNode> nodes = new ArrayList<>();
-    private final File output;
 
+    private final File output;
     private final Remapper remapper = new Remapper();
     private final List<Map.Entry<String, byte[]>> resources = new ArrayList<>();
 
@@ -127,16 +128,44 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         }
     }
 
-    private String createString(int counter) {
-        if (counter > 25) {
-            int first = counter / 26;
-            int second = counter % 26;
-            return String.valueOf(new char[] {(char) ('`' + first), (char) ('a' + second)});
-        } else {
-            return String.valueOf((char) ('a' + counter));
+    protected Map<String, List<String>> computeFullHierarchy(Map<String, List<String>> nearbyHierarchy) {
+        Map<String, List<String>> allSubtypes = new HashMap<>();
+        for (Map.Entry<String, List<String>> clazz : nearbyHierarchy.entrySet()) {
+            String name = clazz.getKey();
+            List<String> subtypes = new ArrayList<>();
+            for (String subtype : clazz.getValue()) {
+                computeFullHierarchy0(subtypes, nearbyHierarchy, subtype);
+            }
+            allSubtypes.put(name, subtypes);
+        }
+        return allSubtypes;
+    }
+
+
+    private void computeFullHierarchy0(List<String> out, Map<String, List<String>> nearbyHierarchy, String current) {
+        out.add(current);
+        List<String> l = nearbyHierarchy.get(current);
+        if (l == null) {
+            return;
+        }
+        for (String subtype : l) {
+            computeFullHierarchy0(out, nearbyHierarchy, subtype);
         }
     }
 
+    private String createString(int counter) {
+        if (alternateClassNaming) {
+            return Integer.toString(counter);
+        } else {
+            if (counter > 25) {
+                int first = counter / 26;
+                int second = counter % 26;
+                return String.valueOf(new char[] {(char) ('`' + first), (char) ('a' + second)});
+            } else {
+                return String.valueOf((char) ('a' + counter));
+            }
+        }
+    }
 
     public void deobfuscate() {
         remapper.process();
@@ -280,6 +309,60 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         return nodes;
     }
 
+    private Map<String, List<String>> invertHierarchy(Map<String, List<String>> allSubtypes) {
+        Map<String, List<String>> allSupertypes = new HashMap<>();
+        allSubtypes.forEach((superType, inSubtypes) -> {
+            for (String subtype : inSubtypes) {
+                List<String> outSupertypes = allSupertypes.get(subtype);
+                if (outSupertypes == null) {
+                    outSupertypes = new ArrayList<>();
+                    allSupertypes.put(subtype, outSupertypes);
+                }
+                outSupertypes.add(superType);
+            }
+        });
+        return allSupertypes;
+    }
+
+    private void propagateDownwards(Map<String, List<String>> directChildren, Collection<MethodReference> output,
+            ClassNode currentNode, MethodReference declaringRef, Map<String, ClassNode> name2Node, OverrideScope currentScope) {
+
+        if (currentScope == OverrideScope.NEVER) {
+            // This is futile
+            return;
+        }
+
+        List<String> children = directChildren.get(currentNode.name);
+        for (String childName : children) {
+            ClassNode childNode = name2Node.get(childName);
+            boolean canOverride = currentScope == OverrideScope.ALWAYS;
+            if (!canOverride) {
+                // scope is OverrideScope.PACKAGE
+                String superMethodPackage = declaringRef.getOwner().substring(0, declaringRef.getOwner().lastIndexOf('/'));
+                String overrdingMethodPackage = childName.substring(0, childName.lastIndexOf('/'));
+                if (superMethodPackage.equals(overrdingMethodPackage)) {
+                    canOverride = true;
+                }
+            }
+            // This also accounts for implicit inheritance
+            output.add(new MethodReference(childName, declaringRef.getDesc(), declaringRef.getName()));
+            boolean found = false;
+            for (MethodNode childMethod : childNode.methods) {
+                if (childMethod.name.equals(declaringRef.getName())
+                        && childMethod.desc.equals(declaringRef.getDesc())
+                        && (childMethod.access & Opcodes.ACC_STATIC) != 0) {
+                    found = true;
+                    int flagWithoutFinal = childMethod.access & ~Opcodes.ACC_FINAL; // Better be safe than sorry
+                    propagateDownwards(directChildren, output, childNode, declaringRef, name2Node, OverrideScope.fromFlags(flagWithoutFinal));
+                    break;
+                }
+            }
+            if (!found) {
+                propagateDownwards(directChildren, output, childNode, declaringRef, name2Node, currentScope);
+            }
+        }
+    }
+
     private void remapClass(String oldName, String newName, BufferedWriter bw) {
         remapper.remapClassName(oldName, newName);
         if (bw != null) {
@@ -393,69 +476,6 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                 bw.close();
             } catch (IOException e) {
                 e.printStackTrace();
-            }
-        }
-    }
-
-    private void computeFullHierarchy0(List<String> out, Map<String, List<String>> nearbyHierarchy, String current) {
-        out.add(current);
-        List<String> l = nearbyHierarchy.get(current);
-        if (l == null) {
-            return;
-        }
-        for (String subtype : l) {
-            computeFullHierarchy0(out, nearbyHierarchy, subtype);
-        }
-    }
-
-    protected Map<String, List<String>> computeFullHierarchy(Map<String, List<String>> nearbyHierarchy) {
-        Map<String, List<String>> allSubtypes = new HashMap<>();
-        for (Map.Entry<String, List<String>> clazz : nearbyHierarchy.entrySet()) {
-            String name = clazz.getKey();
-            List<String> subtypes = new ArrayList<>();
-            for (String subtype : clazz.getValue()) {
-                computeFullHierarchy0(subtypes, nearbyHierarchy, subtype);
-            }
-            allSubtypes.put(name, subtypes);
-        }
-        return allSubtypes;
-    }
-
-    private void propagateDownwards(Map<String, List<String>> directChildren, Collection<MethodReference> output,
-            ClassNode currentNode, MethodReference declaringRef, Map<String, ClassNode> name2Node, OverrideScope currentScope) {
-
-        if (currentScope == OverrideScope.NEVER) {
-            // This is futile
-            return;
-        }
-
-        List<String> children = directChildren.get(currentNode.name);
-        for (String childName : children) {
-            ClassNode childNode = name2Node.get(childName);
-            boolean canOverride = currentScope == OverrideScope.ALWAYS;
-            if (!canOverride) {
-                // scope is OverrideScope.PACKAGE
-                String superMethodPackage = declaringRef.getOwner().substring(0, declaringRef.getOwner().lastIndexOf('/'));
-                String overrdingMethodPackage = childName.substring(0, childName.lastIndexOf('/'));
-                if (superMethodPackage.equals(overrdingMethodPackage)) {
-                    canOverride = true;
-                }
-            }
-            // This also accounts for implicit inheritance
-            output.add(new MethodReference(childName, declaringRef.getDesc(), declaringRef.getName()));
-            boolean found = false;
-            for (MethodNode childMethod : childNode.methods) {
-                if (childMethod.name.equals(declaringRef.getName())
-                        && childMethod.desc.equals(declaringRef.getDesc())
-                        && (childMethod.access & Opcodes.ACC_STATIC) != 0) {
-                    found = true;
-                    int flagWithoutFinal = childMethod.access & ~Opcodes.ACC_FINAL; // Better be safe than sorry
-                    propagateDownwards(directChildren, output, childNode, declaringRef, name2Node, OverrideScope.fromFlags(flagWithoutFinal));
-                    break;
-                }
-            }
-            if (!found) {
-                propagateDownwards(directChildren, output, childNode, declaringRef, name2Node, currentScope);
             }
         }
     }
@@ -770,21 +790,6 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         }
     }
 
-    private Map<String, List<String>> invertHierarchy(Map<String, List<String>> allSubtypes) {
-        Map<String, List<String>> allSupertypes = new HashMap<>();
-        allSubtypes.forEach((superType, inSubtypes) -> {
-            for (String subtype : inSubtypes) {
-                List<String> outSupertypes = allSupertypes.get(subtype);
-                if (outSupertypes == null) {
-                    outSupertypes = new ArrayList<>();
-                    allSupertypes.put(subtype, outSupertypes);
-                }
-                outSupertypes.add(superType);
-            }
-        });
-        return allSupertypes;
-    }
-
     private void remapSet(Map<String, TreeSet<ClassNode>> set, BufferedWriter writer, String prefix) {
         prefix = '/' + prefix;
         for (Map.Entry<String, TreeSet<ClassNode>> packageNode : set.entrySet()) {
@@ -795,10 +800,25 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             }
         }
     }
+
+    /**
+     * Sets whether alternate class naming should be employed. This is very useful if obftools has to be updated or
+     * when the application to link to has changed. Making use of this feature eliminates large portions of issues
+     * where the classes have changed their name, but using the old name is still fully valid. This can cause subtle
+     * bugs that are very hard to trace.
+     * If the alternate naming scheme is on, classes are enumerated with the characters [0-9],
+     * where as they are enumerated with the characters [a-z] when the alternate naming scheme is off.
+     *
+     * @param toggle Whether to use the alternate class naming scheme.
+     */
+    public void useAlternateClassNaming(boolean toggle) {
+        alternateClassNaming = toggle;
+    }
+
 } enum OverrideScope {
+    ALWAYS,
     NEVER,
-    PACKAGE,
-    ALWAYS;
+    PACKAGE;
 
     public static OverrideScope fromFlags(int accessFlags) {
         if ((accessFlags & Opcodes.ACC_STATIC) != 0
