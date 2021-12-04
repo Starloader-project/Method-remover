@@ -4,6 +4,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import de.geolykt.starloader.obftools.asm.MethodReference;
+
 public class MethodRenameMap {
 
     private final Map<MethodReference, String> renames = new HashMap<>();

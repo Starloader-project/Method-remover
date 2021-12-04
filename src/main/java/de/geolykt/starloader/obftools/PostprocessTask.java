@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
@@ -42,8 +43,14 @@ public class PostprocessTask extends Jar {
     @Override
     protected CopyAction createCopyAction() {
         File source = getArchiveFile().get().getAsFile();
-        File map = new File(source.getParentFile().getParentFile().getParentFile(), ObfToolsPlugin.INTERMEDIARY_MAP);
-        return new TransformedCopyTask(extension.annotation, source, source, map);
+        File map = getProject().file(ObfToolsPlugin.INTERMEDIARY_MAP);
+        File reobfOverrides;
+        if (extension.reobfOverrides == null) {
+            reobfOverrides = null;
+        } else {
+            reobfOverrides = this.getProject().file(extension.reobfOverrides);
+        }
+        return new TransformedCopyTask(extension.annotation, source, source, map, Optional.ofNullable(reobfOverrides));
     }
 } class TransformedCopyTask implements CopyAction {
 
@@ -51,12 +58,14 @@ public class PostprocessTask extends Jar {
     private final File mapLocation;
     private final File src;
     private final File targetFinal;
+    private final Optional<File> reobfOverrides;
 
-    public TransformedCopyTask(String annotation, File targetFinal, File source, File mapLocation) {
+    public TransformedCopyTask(String annotation, File targetFinal, File source, File mapLocation, Optional<File> reobfOverrides) {
         this.annotation = annotation;
         this.targetFinal = targetFinal;
         this.src = source;
         this.mapLocation = mapLocation;
+        this.reobfOverrides = reobfOverrides;
     }
 
     @Override
@@ -67,6 +76,10 @@ public class PostprocessTask extends Jar {
 
         try {
             RemapperUtils.readReversedTinyV1File(mapLocation, remapper);
+
+            if (reobfOverrides.isPresent()) {
+                RemapperUtils.readTinyV1File(reobfOverrides.get(), remapper);
+            }
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
