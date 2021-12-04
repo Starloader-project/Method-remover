@@ -5,6 +5,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -23,6 +25,7 @@ import java.util.zip.ZipEntry;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
@@ -51,17 +54,16 @@ public class Oaktree {
     // TODO: lambda handle name recovery
 
     /**
-     * A hardcoded set of implementations of the Iterable interface that apply for
+     * A hardcoded set of implementations of the {@link Collection} interface that apply for
      * generics checking later on.
      */
-    public static final Set<String> ITERABLES = new HashSet<>() {
-        private static final long serialVersionUID = -3779578266088390365L;
+    public static final Set<String> COLLECTIONS = new HashSet<>() {
+        private static final long serialVersionUID = -3779578266088390366L;
 
         {
             add("Ljava/util/Vector;");
             add("Ljava/util/List;");
             add("Ljava/util/ArrayList;");
-            add("Ljava/lang/Iterable;");
             add("Ljava/util/Collection;");
             add("Ljava/util/AbstractCollection;");
             add("Ljava/util/AbstractList;");
@@ -82,6 +84,41 @@ public class Oaktree {
             add("Ljava/util/concurrent/ConcurrentLinkedDeque;");
             add("Ljava/util/Deque;");
             add("Ljava/util/ArrayDeque;");
+        }
+    };
+
+    /**
+     * A hardcoded set of implementations of the {@link Iterable} interface that apply for
+     * generics checking later on.
+     */
+    public static final Set<String> ITERABLES = new HashSet<>() {
+        private static final long serialVersionUID = -3779578266088390365L;
+
+        {
+            add("Ljava/util/Vector;");
+            add("Ljava/util/List;");
+            add("Ljava/util/ArrayList;");
+            add("Ljava/util/Collection;");
+            add("Ljava/util/AbstractCollection;");
+            add("Ljava/util/AbstractList;");
+            add("Ljava/util/AbstractSet;");
+            add("Ljava/util/AbstractQueue;");
+            add("Ljava/util/HashSet;");
+            add("Ljava/util/Set;");
+            add("Ljava/util/Queue;");
+            add("Ljava/util/concurrent/ArrayBlockingQueue;");
+            add("Ljava/util/concurrent/ConcurrentLinkedQueue;");
+            add("Ljava/util/concurrent/ConcurrentLinkedQueue;");
+            add("Ljava/util/concurrent/DelayQueue;");
+            add("Ljava/util/concurrent/LinkedBlockingQueue;");
+            add("Ljava/util/concurrent/SynchronousQueue;");
+            add("Ljava/util/concurrent/BlockingQueue;");
+            add("Ljava/util/concurrent/BlockingDeque;");
+            add("Ljava/util/concurrent/LinkedBlockingDeque;");
+            add("Ljava/util/concurrent/ConcurrentLinkedDeque;");
+            add("Ljava/util/Deque;");
+            add("Ljava/util/ArrayDeque;");
+            add("Ljava/lang/Iterable;");
         }
     };
 
@@ -127,9 +164,15 @@ public class Oaktree {
     }
 
     private final Map<String, ClassNode> nameToNode = new HashMap<>();
-
     private final List<ClassNode> nodes = new ArrayList<>();
+    private final ClassWrapperPool wrapperPool;
+
     public Oaktree() {
+        this(new URLClassLoader("Oaktree ClassWrapper Pool Classloader", new URL[0], Oaktree.class.getClassLoader()));
+    }
+
+    public Oaktree(ClassLoader classWrapperClassloader) {
+        wrapperPool = new ClassWrapperPool(nameToNode, classWrapperClassloader);
     }
 
     /**
@@ -219,9 +262,9 @@ public class Oaktree {
     }
 
     /**
-     * Resolve useless &lt;unknown&gt; mentions when quiltflower decompiles foreach loops that
+     * Resolve useless &lt;unknown&gt; mentions when quiltflower decompiles enhanced for loops that
      * loop on arrays by adding their respective LVT entries via guessing.
-     * However since this requires the knowledge fo the array type, this may not always be successfull.
+     * However since this requires the knowledge of the array type, this may not always be successful.
      *<br/>
      * As this modifies the LVT entries, it should be called AFTER {@link #fixParameterLVT()}.
      *
@@ -617,7 +660,7 @@ public class Oaktree {
      * anything to the LVT is the LVT is declared but empty, which is a sign of the
      * usage of obfuscation tools.
      * It is intended to be used in combination with decompilers such as quiltflower
-     * but might not be usefull for less naive decompilers such as procyon, which do not decompile
+     * but might not be useful for less naive decompilers such as procyon, which do not decompile
      * into incoherent java code if the LVT is damaged.
      */
     public void fixParameterLVT() {
@@ -628,7 +671,7 @@ public class Oaktree {
                 List<ParameterNode> params = method.parameters;
                 if (method.desc.indexOf(')') == 1 && params == null) {
                     // since the description starts with a '(' we don't need to check that one
-                    // a closing paranthesis after the opening one suggests that there are no input parameters.
+                    // a closing parenthesis after the opening one suggests that there are no input parameters.
                     continue;
                 }
                 if ((method.access & Opcodes.ACC_ABSTRACT) != 0) {
@@ -890,10 +933,10 @@ public class Oaktree {
      * Guesses anonymous inner classes by checking whether they have a synthetic field and if they
      * do whether they are referenced only by a single "parent" class.
      * Note: this method is VERY aggressive when it comes to adding inner classes, sometimes it adds
-     * inner classes on stuff where it wouldn't belong. This  means that useage of this method should
-     * be done wiseley. This method will do some damage even if it does no good.
+     * inner classes on stuff where it wouldn't belong. This  means that usage of this method should
+     * be done wisely. This method will do some damage even if it does no good.
      *
-     * @param doLog whether to perfom any logging via System.out
+     * @param doLog whether to perform any logging via System.out
      */
     public void guessAnonymousInnerClasses(boolean doLog) {
         long start = System.currentTimeMillis();
@@ -1077,14 +1120,15 @@ public class Oaktree {
      * would lead to LVT fixing not working properly
      */
     public void guessFieldGenerics() {
-        Map<Map.Entry<String, Map.Entry<String, String>>, SignatureNode> newFieldSignatures = new HashMap<>();
+        Map<FieldReference, SignatureNode> newFieldSignatures = new HashMap<>();
+
         int addedFieldSignatures = 0;
         long startTime = System.currentTimeMillis();
         // index signatureless fields
         for (ClassNode node : nodes) {
             for (FieldNode field : node.fields) {
                 if (field.signature == null && ITERABLES.contains(field.desc)) {
-                    newFieldSignatures.put(Map.entry(node.name, Map.entry(field.name, field.desc)), null);
+                    newFieldSignatures.put(new FieldReference(node.name, field), null);
                 }
             }
         }
@@ -1096,7 +1140,7 @@ public class Oaktree {
                 while (instruction != null) {
                     if (instruction instanceof FieldInsnNode) {
                         FieldInsnNode fieldNode = (FieldInsnNode) instruction;
-                        var key = Map.entry(fieldNode.owner, Map.entry(fieldNode.name, fieldNode.desc));
+                        FieldReference key = new FieldReference(fieldNode);
                         AbstractInsnNode next = instruction.getNext();
                         if (!newFieldSignatures.containsKey(key) // The field doesn't actively search for a new signature
                                 || !(next instanceof MethodInsnNode)) { // We cannot work with this instruction
@@ -1240,15 +1284,121 @@ public class Oaktree {
                 }
             }
         }
+
+        // guess signatures based on Collection#add
+        Map<FieldReference, Map.Entry<ClassWrapper, String>> collectionSignatures = new HashMap<>();
+
+        for (ClassNode node : nodes) {
+            for (MethodNode method : node.methods) {
+                AbstractInsnNode insn = method.instructions.getFirst();
+                while (insn != null) {
+                    if (insn instanceof FieldInsnNode) {
+                        AbstractInsnNode next = insn.getNext();
+                        if (insn.getOpcode() != Opcodes.GETFIELD && insn.getOpcode() != Opcodes.GETSTATIC) {
+                            insn = next;
+                            continue;
+                        }
+                        FieldInsnNode fieldInsn = (FieldInsnNode) insn;
+                        FieldReference fref = new FieldReference(fieldInsn);
+                        if (newFieldSignatures.get(fref) != null) {
+                            // Already mapped via iteration, which is deemed more safe than checking through .add
+                            insn = next;
+                            continue;
+                        }
+                        if (collectionSignatures.containsKey(fref) && collectionSignatures.get(fref) == null) {
+                            // Inconclusive type
+                            insn = next;
+                            continue;
+                        }
+                        if (next == null || next.getOpcode() != Opcodes.NEW) {
+                            insn = next;
+                            continue;
+                        }
+                        TypeInsnNode newInsn = (TypeInsnNode) next;
+                        next = next.getNext();
+                        // FIXME this is a terrible and potentially dangerous solution
+                        while (next != null) {
+                            // FIXME arrays are not initialised that way
+                            if (next.getOpcode() == Opcodes.INVOKESPECIAL && ((MethodInsnNode) next).name.equals("<init>")
+                                    && ((MethodInsnNode) next).owner.equals(newInsn.desc)) {
+                                break;
+                            }
+                            next = next.getNext();
+                        }
+                        if (next == null) {
+                            insn = newInsn.getNext();
+                            continue;
+                        }
+                        next = next.getNext();
+                        if (next == null || !(next instanceof MethodInsnNode)) {
+                            insn = insn.getNext();
+                            continue;
+                        }
+                        MethodInsnNode collectionAdd = (MethodInsnNode) next;
+                        if (!collectionAdd.name.equals("add") || !COLLECTIONS.contains("L" + collectionAdd.owner + ";")) {
+                            insn = next;
+                            continue;
+                        }
+                        Type type = Type.getObjectType(newInsn.desc);
+                        String internalClassName;
+                        if (type.getSort() == Type.ARRAY) {
+                            internalClassName = type.getElementType().getInternalName();
+                        } else {
+                            internalClassName = type.getInternalName();
+                        }
+                        ClassWrapper wrapper = wrapperPool.get(internalClassName);
+                        String signatureDesc;
+                        Map.Entry<ClassWrapper, String> oldEntry = collectionSignatures.get(fref);
+                        if (oldEntry != null) {
+                            // FIXME does not verify compatitibllity with different array sizes
+                            ClassWrapper common = wrapperPool.getCommonSuperClass(wrapper, oldEntry.getKey());
+                            if (common != wrapper) {
+                                if (common == oldEntry.getKey()) {
+                                    signatureDesc = oldEntry.getValue();
+                                } else {
+                                    StringBuilder b = new StringBuilder();
+                                    for (int i = 0; i < newInsn.desc.length(); i++) {
+                                        if (newInsn.desc.codePointAt(i) == '[') {
+                                            b.append('[');
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    b.append('L');
+                                    b.append(common.getName());
+                                    b.append(';');
+                                    signatureDesc = b.toString();
+                                }
+                                wrapper = common;
+                            } else {
+                                signatureDesc = type.getDescriptor();
+                            }
+                            collectionSignatures.put(fref, Map.entry(common, signatureDesc));
+                        } else {
+                            signatureDesc = type.getDescriptor();
+                            collectionSignatures.put(fref, Map.entry(wrapper, signatureDesc));
+                        }
+                    }
+                    insn = insn.getNext();
+                }
+            }
+        }
+
+        for (Entry<FieldReference, Entry<ClassWrapper, String>> collectionEntry : collectionSignatures.entrySet()) {
+            addedFieldSignatures++;
+            newFieldSignatures.put(collectionEntry.getKey(), new SignatureNode(collectionEntry.getKey().getDesc(), collectionEntry.getValue().getValue()));
+        }
+
         System.out.printf("Guessed %d field signatures! (%d ms)\n", addedFieldSignatures, System.currentTimeMillis() - startTime);
 
         for (ClassNode node : nodes) {
             for (FieldNode field : node.fields) {
                 if (field.signature == null && ITERABLES.contains(field.desc)) {
-                    SignatureNode result = newFieldSignatures.get(Map.entry(node.name, Map.entry(field.name, field.desc)));
+                    SignatureNode result = newFieldSignatures.get(new FieldReference(node.name, field));
                     if (result == null) {
-                        //System.out.println("Unable to find signature for : " + node.name + "." + field.name);
+                        // System.out.println("Unable to find signature for: " + node.name + "." + field.name);
                     } else {
+                        // System.out.println("Signature for " + node.name + "." + field.name + " is " + result.toString());
                         field.signature = result.toString();
                     }
                 }
