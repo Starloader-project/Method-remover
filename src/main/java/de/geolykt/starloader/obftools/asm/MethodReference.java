@@ -38,6 +38,15 @@ public class MethodReference {
         return other.name.equals(this.name) && other.desc.equals(this.desc) && other.owner.equals(this.owner);
     }
 
+    /**
+     * Obtains the method descriptor of the referenced method
+     *
+     * @return The method descriptor
+     */
+    public String getDesc() {
+        return desc;
+    }
+
     public String getName() {
         return name;
     }
@@ -50,15 +59,6 @@ public class MethodReference {
      */
     public String getOwner() {
         return owner;
-    }
-
-    /**
-     * Obtains the method descriptor of the referenced method
-     *
-     * @return The method descriptor
-     */
-    public String getDesc() {
-        return desc;
     }
 
     @Override

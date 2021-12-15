@@ -25,7 +25,7 @@ public final class RemapperUtils {
                 br.close();
                 throw new IllegalStateException("No tiny header present (empty file?).");
             }
-            String[] headerTokens = header.split("\t");
+            String[] headerTokens = header.split("\\s+");
             if (headerTokens.length != 3) {
                 br.close();
                 throw new IllegalStateException("The tiny header had " + headerTokens.length + " tokens, however it is expected to be exactly 3.");
@@ -36,7 +36,7 @@ public final class RemapperUtils {
             }
             for (String line = br.readLine(); line != null; line = br.readLine()) {
                 lineNr++;
-                if (line.charAt(0) == '#') { // fast short-circuiting
+                if (line.isBlank() || line.charAt(0) == '#') { // fast short-circuiting
                     continue;
                 }
                 line = line.split("#", 2)[0];
@@ -83,7 +83,7 @@ public final class RemapperUtils {
                 br.close();
                 throw new IllegalStateException("No tiny header present (empty file?).");
             }
-            String[] headerTokens = header.split("\t");
+            String[] headerTokens = header.split("\\s+");
             if (headerTokens.length != 3) {
                 br.close();
                 throw new IllegalStateException("The tiny header had " + headerTokens.length + " tokens, however it is expected to be exactly 3.");
@@ -118,6 +118,7 @@ public final class RemapperUtils {
                         remapper.remapMethod(colums[1], colums[3], colums[4], colums[2]);
                     } catch (ConflicitingMappingException e) {
                         e.printStackTrace();
+                        System.err.println("This is NOT a fatal error, but it is worth looking into.");
                     }
                 } else if (type.equals("FIELD")) {
                     // Format: FIELD owner descriptor originalName newName

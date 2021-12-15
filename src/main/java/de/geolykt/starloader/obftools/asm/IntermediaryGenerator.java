@@ -199,6 +199,8 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                 @SuppressWarnings("resource")
                 BufferedWriter dontcomplain = new BufferedWriter(new FileWriter(map, StandardCharsets.UTF_8, true));
                 bw = dontcomplain;
+                bw.write("# begin enum field remapping");
+                bw.newLine();
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -487,6 +489,8 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                 @SuppressWarnings("resource")
                 BufferedWriter dontcomplain = new BufferedWriter(new FileWriter(map, StandardCharsets.UTF_8, true));
                 bw = dontcomplain;
+                bw.write("# begin getter remapping");
+                bw.newLine();
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -581,6 +585,7 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
 
             FieldReference oldFieldReference = existingMappings.getOrDefault(existingMappings, fref);
             if (!oldFieldReference.getName().equals(fref.getName())) {
+                // FIXME this method never gets called
                 existingMappings.remove(mref);
                 conflictingMappings.add(mref);
             } else {
@@ -666,6 +671,7 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         });
 
         // prevent renaming two methods to the same name
+        // (does not fully work)
         Map<FieldReference, MethodReference> refeers = new HashMap<>();
         existingMappings.forEach((mref, fref)-> {
             MethodReference oldReference = refeers.put(fref, mref);
@@ -704,9 +710,126 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
             }
         });
 
+        StringBuilder sharedBuilder = new StringBuilder();
+
         // Filter out conflicts within the group
         // Also filter out conflicts which occur due to the method name being already present in the class.
-        StringBuilder sharedBuilder = new StringBuilder();
+        Map<MethodReference, String> crudeNames = new HashMap<>();
+        existingMappings.forEach((mref, fref) -> {
+            sharedBuilder.setLength(0);
+            if (fref.getName().length() > 2) {
+                sharedBuilder.append("get");
+                sharedBuilder.appendCodePoint(Character.toUpperCase(fref.getName().codePointAt(0)));
+                sharedBuilder.append(fref.getName().substring(1));
+            } else {
+                sharedBuilder.append("get_");
+                sharedBuilder.append(fref.getName());
+            }
+            String newName = sharedBuilder.toString();
+            Set<MethodReference> group = methodGroups.get(mref);
+            boolean invalid = false;
+            for (MethodReference groupRef : group) {
+                if (conflictingMappings.contains(groupRef)) {
+                    invalid = true;
+                    break;
+                }
+                if (!crudeNames.getOrDefault(groupRef, newName).equals(newName)) {
+                    invalid = true;
+                    // What to do with the old mapping? (especially those that are connected to this one)
+                    break;
+                }
+                ClassNode node = name2Node.get(groupRef.getOwner());
+                for (MethodNode method : node.methods) {
+                    if (method.name.equals(newName) && method.desc.startsWith("()")) {
+                        invalid = true; // Method name already present. (Could we use another name?)
+                        break;
+                    }
+                }
+                if (invalid) {
+                    break;
+                }
+            }
+            if (invalid) {
+                for (MethodReference groupRef : group) {
+                    conflictingMappings.add(groupRef);
+                    crudeNames.remove(groupRef);
+                }
+            } else {
+                for (MethodReference groupRef : group) {
+                    crudeNames.put(groupRef, newName);
+                }
+            }
+        });
+        crudeNames.clear();
+
+        // Guard against remapping two methods within the same class to the same name
+        // This is a far more brute-force approach and takes in account of "method groups"
+        // Apparently the following block is useless, but I'll still leave this here in case I need it
+        Map<MethodReference, MethodReference> potentialRemaps = new HashMap<>(); // future -> current
+        existingMappings.forEach((mref, fref) -> {
+            if (conflictingMappings.contains(mref)) {
+                return;
+            }
+            sharedBuilder.setLength(0);
+            if (fref.getName().length() > 2) {
+                sharedBuilder.append("get");
+                sharedBuilder.appendCodePoint(Character.toUpperCase(fref.getName().codePointAt(0)));
+                sharedBuilder.append(fref.getName().substring(1));
+            } else {
+                sharedBuilder.append("get_");
+                sharedBuilder.append(fref.getName());
+            }
+            String newName = sharedBuilder.toString();
+            MethodReference future = new MethodReference(mref.getOwner(), mref.getDesc(), newName);
+            MethodReference current = potentialRemaps.getOrDefault(future, mref);
+            if (!current.equals(mref) && !methodGroups.get(mref).contains(current)) {
+                // Bigger group "wins", to avoid nullifying large method groups
+                int groupSizeContender = methodGroups.get(mref).size();
+                int groupSizeCurrent = methodGroups.get(current).size();
+                if (groupSizeContender == groupSizeCurrent) {
+                    // Both loose, so build results are reliable
+                    conflictingMappings.add(mref);
+                    conflictingMappings.add(current);
+                } else if (groupSizeContender > groupSizeCurrent) {
+                    // Contender wins
+                    conflictingMappings.add(current);
+                    potentialRemaps.put(future, current);
+                } else {
+                    // Contender looses
+                    conflictingMappings.add(mref);
+                }
+                return;
+            }
+            potentialRemaps.put(future, mref);
+            for (MethodReference groupRef : methodGroups.get(mref)) {
+                if (conflictingMappings.contains(groupRef)) {
+                    continue;
+                }
+                future = new MethodReference(groupRef.getOwner(), groupRef.getDesc(), newName);
+                current = potentialRemaps.getOrDefault(future, mref);
+                if (!current.equals(groupRef) && !methodGroups.get(mref).contains(current)) {
+                    // Bigger group "wins", to avoid nullifying large method groups
+                    int groupSizeContender = methodGroups.get(mref).size();
+                    int groupSizeCurrent = methodGroups.get(current).size();
+                    if (groupSizeContender == groupSizeCurrent) {
+                        // Both loose, so build results are reliable
+                        conflictingMappings.add(mref);
+                        conflictingMappings.add(current);
+                    } else if (groupSizeContender > groupSizeCurrent) {
+                        // Contender wins
+                        conflictingMappings.add(current);
+                        potentialRemaps.put(future, current);
+                    } else {
+                        // Contender looses
+                        conflictingMappings.add(mref);
+                    }
+                    continue;
+                }
+                potentialRemaps.put(future, groupRef);
+            }
+        });
+
+        // Filter out group conflicts, again
         Map<MethodReference, String> proposedNames = new HashMap<>();
         existingMappings.forEach((mref, fref) -> {
             sharedBuilder.setLength(0);
@@ -730,13 +853,6 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
                     invalid = true;
                     // What to do with the old mapping? (especially those that are connected to this one)
                     break;
-                }
-                ClassNode node = name2Node.get(groupRef.getOwner());
-                for (MethodNode method : node.methods) {
-                    if (method.name.equals(newName) && method.desc.startsWith("()")) {
-                        invalid = true; // Method name already present. (Could we use another name?)
-                        break;
-                    }
                 }
                 if (invalid) {
                     break;
