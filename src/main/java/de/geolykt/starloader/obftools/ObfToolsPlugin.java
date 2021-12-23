@@ -57,6 +57,7 @@ public class ObfToolsPlugin implements Plugin<Project> {
                     deobfuscator.fixParameterLVT();
                     deobfuscator.guessFieldGenerics();
                     deobfuscator.inferMethodGenerics(true);
+                    deobfuscator.inferConstructorGenerics(true);
                     deobfuscator.fixSwitchMaps(true);
                     deobfuscator.fixForeachOnArray(true);
                     deobfuscator.fixComparators(true, true);

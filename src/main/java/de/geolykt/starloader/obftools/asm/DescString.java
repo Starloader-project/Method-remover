@@ -11,7 +11,7 @@ public class DescString {
 
     public DescString(String desc) {
         int begin = 1; // Always starts with a paranthesis
-        int end = desc.indexOf(')');
+        int end = desc.lastIndexOf(')');
         this.desc = desc.substring(begin, end);
     }
 

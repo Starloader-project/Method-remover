@@ -139,6 +139,7 @@ public class Oaktree {
             oakTree.fixParameterLVT();
             oakTree.guessFieldGenerics();
             oakTree.inferMethodGenerics(true);
+            oakTree.inferConstructorGenerics(true);
             oakTree.fixSwitchMaps(true);
             oakTree.fixForeachOnArray(true);
             oakTree.fixComparators(true, true);
@@ -1436,6 +1437,278 @@ public class Oaktree {
     }
 
     /**
+     * Infers the generics of constructors based on the calls to the constructor.
+     *
+     * @param doLogging Whether to perform any statics logging
+     */
+    public void inferConstructorGenerics(boolean doLogging) {
+        long startTime = System.currentTimeMillis();
+        int guessedConstructorSignatures = 0;
+        int guessedFieldSignatures = 0;
+
+        // Index constructors
+        Map<MethodReference, List<String>> constructors = new HashMap<>();
+        for (ClassNode node : nodes) {
+            for (MethodNode method : node.methods) {
+                if (method.signature != null) {
+                    continue; // No point in guessing the signature if we already know it
+                }
+                if (!method.name.equals("<init>")) {
+                    continue; // Not a constructor
+                }
+                if (method.desc.codePointAt(1) == ')') {
+                    continue; // No arguments to infer stuff from
+                }
+                DescString descString = new DescString(method.desc);
+                while (descString.hasNext()) {
+                    if (ITERABLES.contains(descString.nextType())) {
+                        // The constructor has at least 1 generic-able argument
+                        constructors.put(new MethodReference(node.name, method), null);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Index references to constructors
+        for (ClassNode node : nodes ) {
+            for (MethodNode method : node.methods) {
+                if (method.instructions == null) {
+                    continue; // Abstract method with no body
+                }
+                AbstractInsnNode insn = method.instructions.getFirst();
+                while (insn != null) {
+                    if (insn.getOpcode() == Opcodes.INVOKESPECIAL) {
+                        MethodInsnNode ctorCall = (MethodInsnNode) insn;
+                        if (!ctorCall.name.equals("<init>")) {
+                            insn = insn.getNext();
+                            continue;
+                        }
+                        MethodReference ctorReference = new MethodReference(ctorCall);
+                        if (!constructors.containsKey(ctorReference)) {
+                            // Constructor not indexed, likely because it does not need a signature,
+                            // but it can also be that the constructor is not known because it is not a class that should be deobfuscated
+                            insn = insn.getNext();
+                            continue;
+                        }
+
+                        TypeInsnNode newCall = null;
+                        AbstractInsnNode insn2 = insn.getPrevious();
+
+                        while (insn2 != null) {
+                            if (insn2.getOpcode() == Opcodes.DUP) {
+                                if (insn2.getPrevious().getOpcode() != Opcodes.NEW) {
+                                    break; // While technically not strictly breaking, I'd want to save some time calculating all the stack deltas
+                                }
+                                TypeInsnNode new2 = (TypeInsnNode) insn2.getPrevious();
+                                if (new2.desc.equals(ctorReference.getOwner())) { // Given the other checks nothing else is possible, but we'll have it here anyways for "unit testing"
+                                    newCall = new2;
+                                }
+                                break;
+                            }
+                            if (insn2.getOpcode() != Opcodes.INVOKESTATIC && insn2.getOpcode() != Opcodes.GETSTATIC) {
+                                break; // Technically we could allow non-static variants, but they are a bit harder to compute
+                            }
+                            insn2 = insn2.getPrevious();
+                        }
+
+                        if (newCall == null || insn2 == null) {
+                            insn = insn.getNext();
+                            continue;
+                        }
+
+                        List<String> ourArgs = new ArrayList<>();
+                        insn2 = insn2.getNext();
+
+                        boolean invalidate = false;
+                        while (insn2 != ctorCall) {
+                            if (insn2.getOpcode() == Opcodes.INVOKESTATIC) {
+                                MethodInsnNode invokestaticInsn = (MethodInsnNode) insn2;
+                                if (invokestaticInsn.desc.codePointAt(1) != ')') {
+                                    invalidate = true; // Not a getter-like method, however the method MUST be a getter-like method
+                                    break;
+                                }
+                                if (!ITERABLES.contains(invokestaticInsn.desc.substring(2))) {
+                                    ourArgs.add(null);
+                                    insn2 = insn2.getNext();
+                                    continue;
+                                }
+                                ourArgs.add(""); // I'm too lazy to fetch the generic signature of the method, so we'll leave this blank
+                            } else if (insn2.getOpcode() == Opcodes.GETSTATIC) {
+                                FieldInsnNode getstaticInsn = (FieldInsnNode) insn2;
+                                if (!ITERABLES.contains(getstaticInsn.desc)) {
+                                    ourArgs.add(null);
+                                    insn2 = insn2.getNext();
+                                    continue;
+                                }
+
+                                // Fetch generic signature of the field
+                                ClassNode ownerNode = nameToNode.get(getstaticInsn.owner);
+                                if (ownerNode == null) {
+                                    // Class does not exist for some reason
+                                    ourArgs.add("");
+                                    insn2 = insn2.getNext();
+                                    continue;
+                                }
+
+                                String fetchedSignature = null;
+                                for (FieldNode ownerField : ownerNode.fields) {
+                                    if (ownerField.name.equals(getstaticInsn.name) && ownerField.desc.equals(getstaticInsn.desc)) {
+                                        fetchedSignature = ownerField.signature;
+                                        break;
+                                    }
+                                }
+                                if (fetchedSignature == null) {
+                                    // Unable to fetch signature
+                                    ourArgs.add("");
+                                    insn2 = insn2.getNext();
+                                    continue;
+                                }
+
+                                int startSign = fetchedSignature.indexOf('<');
+                                int endSign = fetchedSignature.indexOf('>');
+                                ourArgs.add(fetchedSignature.substring(startSign, endSign + 1));
+                            }
+                            insn2 = insn2.getNext();
+                        }
+
+                        if (!invalidate) {
+                            List<String> old = constructors.get(ctorReference);
+                            if (old != null) {
+                                // Merge the two lists
+                                if (old.size() != ourArgs.size()) {
+                                    throw new IllegalStateException("Argument sizes do not match.");
+                                }
+                                for (int i = 0; i < old.size(); i++) {
+                                    String oldElement = old.get(i);
+                                    String newElement = ourArgs.get(i);
+                                    if (oldElement == null || newElement == null) {
+                                        ourArgs.set(i, null);
+                                    } else if (newElement.isEmpty()) {
+                                        ourArgs.set(i, oldElement);
+                                    } else if (oldElement.isEmpty()) {
+                                        // Don't do anything
+                                    } else if (!oldElement.equals(newElement)) {
+                                        ourArgs.set(i, null);
+                                    }
+                                }
+                            }
+                            constructors.put(ctorReference, ourArgs);
+                        }
+                    }
+                    insn = insn.getNext();
+                }
+            }
+        }
+
+        Map<FieldReference, String> fieldSignatures = new HashMap<>();
+        // Apply generic signatures on the constructor
+        StringBuilder signatureAssembler = new StringBuilder();
+        for (ClassNode node : nodes) {
+            for (MethodNode method : node.methods) {
+                if (method.signature != null) {
+                    continue; // reduce memory allocation
+                }
+                List<String> argumentSignatures = constructors.get(new MethodReference(node.name, method));
+                if (argumentSignatures == null) {
+                    continue;
+                }
+                DescString plainDescriptor = new DescString(method.desc);
+                signatureAssembler.setLength(0);
+                signatureAssembler.append('(');
+                for (int i = 0; i < argumentSignatures.size(); i++) {
+                    String type = plainDescriptor.nextType();
+                    if (type.codePointAt(0) == 'L') {
+                        signatureAssembler.append(type.substring(0, type.length() - 1));
+                        String argSignature = argumentSignatures.get(i);
+                        if (argSignature != null) {
+                            signatureAssembler.append(argSignature);
+                        }
+                        signatureAssembler.append(';');
+                    } else {
+                        signatureAssembler.append(type);
+                    }
+                }
+                if (plainDescriptor.hasNext()) {
+                    System.err.println("Signature for method " + node.name + "." + method.name + method.desc + " could not be completed fully because some parameters are missing.");
+                    continue;
+                }
+                signatureAssembler.append(')');
+                signatureAssembler.append('V');
+                method.signature = signatureAssembler.toString();
+                guessedConstructorSignatures++;
+
+                // Infer field signatures too
+                boolean[] damagedLocals = new boolean[argumentSignatures.size() + 1];
+                // The constructor is never static and the `this` local variable is not capable of generics
+                // Not marking it as "damaged" may create issues for us
+                damagedLocals[0] = true;
+                AbstractInsnNode insn = method.instructions.getFirst();
+                int loadedLocal = -1;
+                while (insn != null) {
+                    if (insn instanceof VarInsnNode) {
+                        VarInsnNode varInsn = (VarInsnNode) insn;
+                        if (OPHelper.isVarLoad(varInsn.getOpcode())) {
+                            // xLoad
+                            if (varInsn.var < damagedLocals.length) {
+                                loadedLocal = varInsn.var;
+                            } else {
+                                loadedLocal = -1;
+                            }
+                        } else {
+                            // xStore
+                            if (varInsn.var < damagedLocals.length) {
+                                damagedLocals[varInsn.var] = true;
+                            }
+                        }
+                    } else if (insn instanceof FieldInsnNode) {
+                        if (loadedLocal < damagedLocals.length && loadedLocal != -1 && !damagedLocals[loadedLocal]) {
+                            FieldInsnNode fieldInsn = (FieldInsnNode) insn;
+                            if (fieldInsn.getOpcode() == Opcodes.PUTFIELD || fieldInsn.getOpcode() == Opcodes.PUTSTATIC) {
+                                FieldReference fref = new FieldReference(fieldInsn);
+                                if (fieldSignatures.containsKey(fref)) {
+                                    String oldProposal = fieldSignatures.get(fref);
+                                    String suggested = argumentSignatures.get(loadedLocal - 1);
+                                    if (oldProposal != null && suggested != null && !suggested.isEmpty()) {
+                                        if (!oldProposal.equals(suggested)) {
+                                            fieldSignatures.put(fref, null);
+                                        }
+                                    }
+                                } else {
+                                    fieldSignatures.put(fref, argumentSignatures.get(loadedLocal - 1));
+                                }
+                            }
+                        }
+                    } else {
+                        loadedLocal = -1;
+                    }
+                    insn = insn.getNext();
+                }
+            }
+        }
+
+        for (ClassNode node : nodes) {
+            for (FieldNode field : node.fields) {
+                if (field.signature != null) {
+                    continue;
+                }
+                FieldReference fref = new FieldReference(node.name, field);
+                String suggested = fieldSignatures.get(fref);
+                if (suggested != null) {
+                    signatureAssembler.setLength(0);
+                    signatureAssembler.append(field.desc.substring(0, field.desc.length() - 1)).append(suggested).append(';');
+                    field.signature = signatureAssembler.toString();
+                    guessedFieldSignatures++;
+                }
+            }
+        }
+
+        if (doLogging) {
+            System.out.printf("Inferred %d constructor and %d field signatures! (%d ms)%n", guessedConstructorSignatures, guessedFieldSignatures, (System.currentTimeMillis() - startTime));
+        }
+    }
+
+    /**
      * Infers the generic signatures of methods based on the contents of the method.
      *
      * @param doLogging Whether to perform any statics logging
@@ -1495,6 +1768,7 @@ public class Oaktree {
                     List<MethodNode> references = getterRefs.get(new FieldReference(node.name, field));
                     if (references != null) {
                         for (MethodNode reference : references) {
+                            // FIXME Casts?
                             reference.signature = "()" + field.signature;
                             addedMethodSignatures++;
                         }
