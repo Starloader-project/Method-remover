@@ -10,8 +10,7 @@ targetCompatibility = 11
 
 group = 'de.geolykt.starloader'
 archivesBaseName = 'obftools'
-// heya retard: to change the version you need to modify line 14 (the next line), line 49 and line 70.
-def baseVersion = '1.4.0'
+def baseVersion = '1.5.0'
 
 repositories {
     maven {
@@ -66,5 +65,8 @@ publishing {
     }
     repositories {
         mavenLocal()
+        /*maven {
+            url = "/home/Geolykt/maven-alt/repo/"
+        }*/
     }
 }

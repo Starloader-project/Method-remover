@@ -138,6 +138,7 @@ public class Oaktree {
             oakTree.fixInnerClasses();
             oakTree.fixParameterLVT();
             oakTree.guessFieldGenerics();
+            oakTree.inferMethodGenerics(true);
             oakTree.fixSwitchMaps(true);
             oakTree.fixForeachOnArray(true);
             oakTree.fixComparators(true, true);
@@ -1265,7 +1266,7 @@ public class Oaktree {
                             // expects that the start label provided by of the LVT entry is equal to the first declaration of the
                             // entry. While I have already brought forward a fix for this, unfortunately this results in a few other
                             // (more serious) issues that result in formerly broken but technically correct and compilable code
-                            // being uncompilable. This makes it unlikely that the fix would be pushed anytime soon.
+                            // being no longer compilable. This makes it unlikely that the fix would be pushed anytime soon.
                             // My assumption is that this has something to do with another bug in the decompiler,
                             // but in the meantime I guess that we will have to work around this bug by adding a LabelNode
                             // just before the first astore operation.
@@ -1432,6 +1433,77 @@ public class Oaktree {
             }
         });
         System.out.println("Oaktree indexed class files!");
+    }
+
+    /**
+     * Infers the generic signatures of methods based on the contents of the method.
+     *
+     * @param doLogging Whether to perform any statics logging
+     */
+    public void inferMethodGenerics(boolean doLogging) {
+        int addedMethodSignatures = 0;
+        long startTime = System.currentTimeMillis();
+
+        // Infer generics of getters
+        Map<FieldReference, List<MethodNode>> getterRefs = new HashMap<>();
+        for (ClassNode classNode : nodes) {
+            for (MethodNode method : classNode.methods) {
+                if (method.signature != null) {
+                    continue; // We already know the signature
+                }
+                if (method.instructions.size() == 0) {
+                    // Abstract method (can also be a method within an interface)
+                    continue;
+                }
+                if (method.desc.codePointAt(1) != ')') {
+                    continue; // not a getter
+                }
+                String returnValue = method.desc.substring(2);
+                int indexOfL = returnValue.indexOf('L');
+                if (indexOfL == -1) {
+                    // We cannot add generics to primitives
+                    continue;
+                }
+                String rawObject = returnValue.substring(indexOfL);
+                if (!ITERABLES.contains(rawObject)) {
+                    continue; // Not something we know can be a generic
+                }
+                AbstractInsnNode insn = method.instructions.getLast().getPrevious();
+                while (insn != null && insn.getOpcode() != Opcodes.ARETURN) {
+                    insn = insn.getPrevious();
+                }
+                if (insn != null) {
+                    continue; // not a straightforward getter
+                }
+                insn = method.instructions.getLast().getPrevious();
+                if (!(insn instanceof FieldInsnNode)) {
+                    continue; // We only accept getters that directly return a field
+                }
+                List<MethodNode> old = getterRefs.get(new FieldReference((FieldInsnNode) insn));
+                if (old == null) {
+                    old = new ArrayList<>();
+                    getterRefs.put(new FieldReference((FieldInsnNode) insn), old);
+                }
+                old.add(method);
+            }
+        }
+
+        // Set the signatures
+        for (ClassNode node : nodes) {
+            for (FieldNode field : node.fields) {
+                if (field.signature != null && ITERABLES.contains(field.desc)) {
+                    List<MethodNode> references = getterRefs.get(new FieldReference(node.name, field));
+                    if (references != null) {
+                        for (MethodNode reference : references) {
+                            reference.signature = "()" + field.signature;
+                            addedMethodSignatures++;
+                        }
+                    }
+                }
+            }
+        }
+
+        System.out.printf("Infered %d method signatures! (%d ms)\n", addedMethodSignatures, System.currentTimeMillis() - startTime);
     }
 
     public void write(OutputStream out) throws IOException {
