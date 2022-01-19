@@ -1153,7 +1153,7 @@ public class Oaktree {
                         MethodInsnNode iteratorMethod = (MethodInsnNode) next;
                         next = next.getNext();
                         // check whether the called method is Iterable#iterator
-                        if (iteratorMethod.itf // definitely not it
+                        if (iteratorMethod.itf // definitely not it // FIXME huh?
                                 || !iteratorMethod.name.equals("iterator")
                                 || !iteratorMethod.desc.equals("()Ljava/util/Iterator;")
                                 || !(next instanceof VarInsnNode)) { // We cannot work with this instruction
@@ -1471,7 +1471,7 @@ public class Oaktree {
         }
 
         // Index references to constructors
-        for (ClassNode node : nodes ) {
+        for (ClassNode node : nodes) {
             for (MethodNode method : node.methods) {
                 if (method.instructions == null) {
                     continue; // Abstract method with no body
@@ -1613,12 +1613,16 @@ public class Oaktree {
                 if (argumentSignatures == null) {
                     continue;
                 }
+                // TODO test whether this code really deals with the long/double quirk correctly
+                int[] parameterIndices = new int[argumentSignatures.size() + 1];
                 DescString plainDescriptor = new DescString(method.desc);
                 signatureAssembler.setLength(0);
                 signatureAssembler.append('(');
+                int paramIndex = 1;
                 for (int i = 0; i < argumentSignatures.size(); i++) {
                     String type = plainDescriptor.nextType();
                     if (type.codePointAt(0) == 'L') {
+                        parameterIndices[i + 1] = paramIndex++;
                         signatureAssembler.append(type.substring(0, type.length() - 1));
                         String argSignature = argumentSignatures.get(i);
                         if (argSignature != null) {
@@ -1626,6 +1630,12 @@ public class Oaktree {
                         }
                         signatureAssembler.append(';');
                     } else {
+                        if (type.codePointAt(0) == 'D' || type.codePointAt(0) == 'J') {
+                            parameterIndices[i + 1] = paramIndex;
+                            paramIndex += 2;
+                        } else {
+                            parameterIndices[i + 1] = paramIndex++;
+                        }
                         signatureAssembler.append(type);
                     }
                 }
@@ -1638,49 +1648,57 @@ public class Oaktree {
                 method.signature = signatureAssembler.toString();
                 guessedConstructorSignatures++;
 
-                // Infer field signatures too
-                boolean[] damagedLocals = new boolean[argumentSignatures.size() + 1];
+                boolean[] damagedParams = new boolean[argumentSignatures.size() + 1];
+                int[] localToParam = new int[paramIndex];
+                for (int i = 0; i < parameterIndices.length; i++) {
+                    localToParam[parameterIndices[i]] = i;
+                }
                 // The constructor is never static and the `this` local variable is not capable of generics
                 // Not marking it as "damaged" may create issues for us
-                damagedLocals[0] = true;
+                damagedParams[0] = true;
                 AbstractInsnNode insn = method.instructions.getFirst();
-                int loadedLocal = -1;
+                int loadedParameter = -1;
+
+                // Infer field signatures too
                 while (insn != null) {
                     if (insn instanceof VarInsnNode) {
                         VarInsnNode varInsn = (VarInsnNode) insn;
                         if (OPHelper.isVarLoad(varInsn.getOpcode())) {
                             // xLoad
-                            if (varInsn.var < damagedLocals.length) {
-                                loadedLocal = varInsn.var;
+                            if (varInsn.var < localToParam.length) {
+                                loadedParameter = localToParam[varInsn.var];
+                                if (loadedParameter >= damagedParams.length) {
+                                    loadedParameter = -1;
+                                }
                             } else {
-                                loadedLocal = -1;
+                                loadedParameter = -1;
                             }
                         } else {
                             // xStore
-                            if (varInsn.var < damagedLocals.length) {
-                                damagedLocals[varInsn.var] = true;
+                            if (varInsn.var < localToParam.length && localToParam[varInsn.var] < damagedParams.length) {
+                                damagedParams[localToParam[varInsn.var]] = true;
                             }
                         }
                     } else if (insn instanceof FieldInsnNode) {
-                        if (loadedLocal < damagedLocals.length && loadedLocal != -1 && !damagedLocals[loadedLocal]) {
+                        if (loadedParameter < damagedParams.length && loadedParameter != -1 && !damagedParams[loadedParameter]) {
                             FieldInsnNode fieldInsn = (FieldInsnNode) insn;
                             if (fieldInsn.getOpcode() == Opcodes.PUTFIELD || fieldInsn.getOpcode() == Opcodes.PUTSTATIC) {
                                 FieldReference fref = new FieldReference(fieldInsn);
                                 if (fieldSignatures.containsKey(fref)) {
                                     String oldProposal = fieldSignatures.get(fref);
-                                    String suggested = argumentSignatures.get(loadedLocal - 1);
+                                    String suggested = argumentSignatures.get(loadedParameter - 1);
                                     if (oldProposal != null && suggested != null && !suggested.isEmpty()) {
                                         if (!oldProposal.equals(suggested)) {
                                             fieldSignatures.put(fref, null);
                                         }
                                     }
                                 } else {
-                                    fieldSignatures.put(fref, argumentSignatures.get(loadedLocal - 1));
+                                    fieldSignatures.put(fref, argumentSignatures.get(loadedParameter - 1));
                                 }
                             }
                         }
                     } else {
-                        loadedLocal = -1;
+                        loadedParameter = -1;
                     }
                     insn = insn.getNext();
                 }
