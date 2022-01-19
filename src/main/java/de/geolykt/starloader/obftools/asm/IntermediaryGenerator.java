@@ -153,17 +153,20 @@ class ClassNodeNameComparator implements Comparator<ClassNode> {
         }
     }
 
-    private String createString(int counter) {
+    private String createString(int num) {
         if (alternateClassNaming) {
-            return Integer.toString(counter);
+            return Integer.toString(num);
         } else {
-            if (counter > 25) {
-                int first = counter / 26;
-                int second = counter % 26;
-                return String.valueOf(new char[] {(char) ('`' + first), (char) ('a' + second)});
-            } else {
-                return String.valueOf((char) ('a' + counter));
+            // Create base 26 string with the characters a-z.
+            num++;
+            int len = 16;
+            byte[] characters = new byte[len];
+            int i;
+            for (i = len - 1; num != 0; i--) {
+                characters[i] = (byte) ((--num % 26) + 'a');
+                num /= 26;
             }
+            return new String(characters, ++i, len - i, StandardCharsets.US_ASCII);
         }
     }
 
