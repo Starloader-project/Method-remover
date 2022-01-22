@@ -135,6 +135,7 @@ public class Oaktree {
             JarFile file = new JarFile(args[0]);
             oakTree.index(file);
             file.close();
+            oakTree.definalizeAnonymousClasses();
             oakTree.fixInnerClasses();
             oakTree.fixParameterLVT();
             oakTree.guessFieldGenerics();
@@ -144,6 +145,9 @@ public class Oaktree {
             oakTree.fixForeachOnArray(true);
             oakTree.fixComparators(true, true);
             oakTree.guessAnonymousInnerClasses(true);
+            long startStep = System.currentTimeMillis();
+            oakTree.applyInnerclasses();
+            System.out.println("Applied inner class nodes to referencing classes. (" + (System.currentTimeMillis() - startStep) + " ms)");
             if (args.length == 3 && Boolean.valueOf(args[2]) == true) {
                 // remapper activate!
                 IntermediaryGenerator gen = new IntermediaryGenerator(new File("map.tiny"), new File(args[1]), oakTree.nodes);
@@ -176,6 +180,65 @@ public class Oaktree {
 
     public Oaktree(ClassLoader classWrapperClassloader) {
         wrapperPool = new ClassWrapperPool(nameToNode, classWrapperClassloader);
+    }
+
+    /**
+     * Applies the inner class nodes to any encountered classes.
+     */
+    public void applyInnerclasses() {
+        // Index inner class nodes
+        Map<String, InnerClassNode> innerClassNodes = new HashMap<>();
+        for (ClassNode node : nodes) {
+            for (InnerClassNode icn : node.innerClasses) {
+                if (icn.name.equals(node.name)) {
+                    innerClassNodes.put(node.name, icn);
+                    break;
+                }
+            }
+        }
+
+        // Find references to these classes
+        Set<String> encounteredClasses = new HashSet<>();
+        for (ClassNode node : nodes) {
+            encounteredClasses.clear();
+            for (InnerClassNode icn : node.innerClasses) {
+                encounteredClasses.add(icn.name);
+            }
+            for (MethodNode method : node.methods) {
+                if (method.instructions == null) {
+                    continue;
+                }
+                for (AbstractInsnNode insn : method.instructions) {
+                    if (insn instanceof MethodInsnNode) {
+                        MethodInsnNode methodRef = (MethodInsnNode) insn;
+                        if (encounteredClasses.add(methodRef.owner)) {
+                            InnerClassNode icn = innerClassNodes.get(methodRef.owner);
+                            if (icn != null) {
+                                node.innerClasses.add(icn);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Removes the final access modifier from non-obfuscated anonymous classes.
+     * The reason this is done is because for recompiled galimulator (using Java 17 to compile and target 1.8),
+     * the access modifiers differ in this instance. Why exactly this is the case is unknown to me.
+     */
+    public void definalizeAnonymousClasses() {
+        for (ClassNode node : nodes) {
+            int dollarIndex = node.name.indexOf('$');
+            if (dollarIndex == -1) {
+                continue;
+            }
+            if (Character.isDigit(node.name.codePointAt(dollarIndex + 1))) {
+                // Highly likely an anonymous class, so we remove the anonymous access flag
+                node.access &= ~Opcodes.ACC_FINAL;
+            }
+        }
     }
 
     /**
@@ -516,6 +579,8 @@ public class Oaktree {
                     node.innerClasses.add(innerNode);
                 }
             } else if (node.name.contains("$")) {
+                // Partially unobfuscated inner class.
+
                 // This operation cannot be performed during the first sweep
                 boolean skip = false;
                 for (InnerClassNode innernode : node.innerClasses) {
@@ -553,18 +618,23 @@ public class Oaktree {
                             staticInnerClass = outerClassNode != null && (outerClassNode.access & Opcodes.ACC_INTERFACE) != 0;
                             implicitStatic = staticInnerClass;
                         }
-                        // the constructor(s) of the explicit static inner class never contain a reference to the outer class
+                        // The constructor of non-static inner classes must take in an instance of the outer class an
+                        // argument
                         if (!staticInnerClass && outerNode != null) {
                             boolean staticConstructor = false;
                             for (MethodNode method : node.methods) {
                                 if (method.name.equals("<init>")) {
                                     int outernodeLen = outerNode.length();
                                     if (outernodeLen + 2 > method.desc.length()) {
+                                        // The reference to the outer class cannot be passed in via a parameter as there
+                                        // i no space for it in the descriptor, so the class has to be static
                                         staticConstructor = true;
                                         break;
                                     }
                                     String arg = method.desc.substring(2, outernodeLen + 2);
-                                    if (!arg.equals(outerNode) || method.desc.codePointAt(outernodeLen + 2) != ';') {
+                                    if (!arg.equals(outerNode)) {
+                                        // Has to be static. The other parameters are irrelevant as the outer class
+                                        // reference is always at first place.
                                         staticConstructor = true;
                                         break;
                                     }
@@ -583,17 +653,24 @@ public class Oaktree {
                                 }
                             }
                         }
+
+                        int innerClassAccess = node.access & ~Opcodes.ACC_SUPER; // Super is not allowed for inner class nodes
+
                         // Don't fall to the temptation of adding ACC_STATIC to the class node.
-                        // According the the verifier it is not legal to do so. However the JVM does not care
+                        // According the the ASM verifier it is not legal to do so. However the JVM does not seem care
+                        // Nonetheless, we are not adding it the access flags of the class, though we will add it in the inner
+                        // class node
                         if (!staticInnerClass) {
                             // Beware of https://docs.oracle.com/javase/specs/jls/se16/html/jls-8.html#jls-8.1.3
                             node.outerClass = outerNode;
+                        } else {
+                            innerClassAccess |= Opcodes.ACC_STATIC;
                         }
-                        // Super is not allowed for inner class nodes
-                        innerClassNode = new InnerClassNode(node.name, outerNode, innerMost, node.access & ~Opcodes.ACC_SUPER);
+                        innerClassNode = new InnerClassNode(node.name, outerNode, innerMost, innerClassAccess);
                     }
                     parents.get(outerNode).add(innerClassNode);
                     splitInner.put(node.name, innerClassNode);
+                    node.innerClasses.add(innerClassNode);
                 }
             }
         }
@@ -975,7 +1052,7 @@ public class Oaktree {
             for (MethodNode method : node.methods) {
                 if (method.name.equals("<init>")) {
                     if (constructor != null) {
-                        // cant have multiple constructors
+                        // cannot have multiple constructors
                         skipClass = true;
                         break; // short-circuit
                     }
@@ -1004,7 +1081,8 @@ public class Oaktree {
             if (skipClass) {
                 continue;
             }
-            if (node.name.indexOf('$') != -1 && !Character.isDigit(node.name.charAt(node.name.length() - 1))) {
+            int dollarIndex = node.name.indexOf('$');
+            if (dollarIndex != -1 && !Character.isDigit(node.name.codePointAt(dollarIndex + 1))) {
                 // Unobfuscated class that is 100% not anonymous
                 continue;
             }
