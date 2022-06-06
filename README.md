@@ -1,3 +1,6 @@
+**Obftools has been superseded by Sl-Deobf and Starplane.
+As such, it is no longer maintained.**
+
 # Obftools
 
 A multi-purpose gradle plugin to work with obfuscated codebases,
